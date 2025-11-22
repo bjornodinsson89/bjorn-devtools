@@ -1,307 +1,395 @@
-// Bjorn Dev Tools — Network Inspector Plugin
-(function() {
-    if (!window.BjornDevTools) {
-        console.error("[BjornDevTools][NetworkInspector] Core not loaded.");
-        return;
-    }
-
+// plugins/network-inspector.js
+(function () {
     const DevTools = window.BjornDevTools;
-    const api = DevTools.api;
+    if (!DevTools || !DevTools.definePlugin) return;
 
-    /***********************************************************
-     * INTERNAL NETWORK HOOK SYSTEM
-     ***********************************************************/
-    const requests = [];
-    let reqId = 0;
-
-    // Observers
-    const listeners = {
-        request: [],
-        update: []
-    };
-
-    function emit(type, data) {
-        (listeners[type] || []).forEach(fn => {
-            try { fn(data); } catch (e) {}
-        });
-    }
-
-    function on(type, fn) {
-        if (!listeners[type]) listeners[type] = [];
-        listeners[type].push(fn);
-    }
-
-    /***********************************************************
-     * WRAP FETCH
-     ***********************************************************/
-    const _fetch = window.fetch;
-    window.fetch = async function(url, opts = {}) {
-        const id = reqId++;
-        const start = performance.now();
-
-        const entry = {
-            id,
-            time: new Date().toLocaleTimeString(),
-            method: (opts.method || "GET").toUpperCase(),
-            url: (typeof url === "string" ? url : url.url),
-            status: "...",
-            duration: 0,
-            headers: null,
-            responseHeaders: null,
-            body: opts.body || null,
-            response: null,
-            error: null
-        };
-        requests.push(entry);
-        emit("request", entry);
-
-        try {
-            const res = await _fetch(url, opts);
-            entry.duration = performance.now() - start;
-            entry.status = res.status;
-            entry.responseHeaders = Array.from(res.headers.entries());
-            
-            // Clone + preview body
-            try {
-                const clone = res.clone();
-                const text = await clone.text();
-                entry.response = text.substring(0, 2000);
-            } catch (e) {
-                entry.response = "[Body unreadable]";
-            }
-
-            emit("update", entry);
-            return res;
-        } catch (e) {
-            entry.duration = performance.now() - start;
-            entry.error = e.toString();
-            emit("update", entry);
-            throw e;
-        }
-    };
-
-    /***********************************************************
-     * WRAP XHR
-     ***********************************************************/
-    const _open = XMLHttpRequest.prototype.open;
-    const _send = XMLHttpRequest.prototype.send;
-
-    XMLHttpRequest.prototype.open = function(method, url, async = true, user, pass) {
-        this._bjorn = {
-            id: reqId++,
-            method: method.toUpperCase(),
-            url,
-            start: 0,
-            end: 0,
-            headers: [],
-            body: null,
-            response: null,
-            status: "...",
-            error: null
-        };
-        return _open.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.setRequestHeader = function(key, value) {
-        if (this._bjorn) this._bjorn.headers.push([key, value]);
-        return XMLHttpRequest.prototype.setRequestHeader.apply(this, arguments);
-    };
-
-    XMLHttpRequest.prototype.send = function(body) {
-        if (this._bjorn) {
-            const data = this._bjorn;
-            data.start = performance.now();
-            data.body = body;
-
-            const entry = {
-                id: data.id,
-                time: new Date().toLocaleTimeString(),
-                method: data.method,
-                url: data.url,
-                status: "...",
-                duration: 0,
-                headers: data.headers,
-                body: data.body,
-                responseHeaders: null,
-                response: null,
-                error: null
-            };
-            requests.push(entry);
-            emit("request", entry);
-
-            this.addEventListener("loadend", () => {
-                try {
-                    entry.status = this.status;
-                    entry.duration = performance.now() - data.start;
-
-                    // Response headers
-                    const raw = this.getAllResponseHeaders();
-                    entry.responseHeaders = raw
-                        .trim()
-                        .split(/[\r\n]+/)
-                        .map(line => {
-                            const idx = line.indexOf(":");
-                            return [line.slice(0, idx), line.slice(idx + 1).trim()];
-                        });
-
-                    // Response body
-                    entry.response = this.responseText
-                        ? this.responseText.substring(0, 2000)
-                        : null;
-
-                } catch (e) {
-                    entry.error = e.toString();
-                }
-
-                emit("update", entry);
-            });
-        }
-        return _send.apply(this, arguments);
-    };
-
-    /***********************************************************
-     * NETWORK INSPECTOR UI
-     ***********************************************************/
-    DevTools.plugins.register({
-        id: "networkInspector",
-        title: "Network Inspector",
+    DevTools.definePlugin("networkInspector", {
         tab: "NETWORK",
 
-        init(api, ui) {
-            const panel = ui.createPanel();
-            panel.style.fontFamily = "monospace";
+        onLoad(api) {
+            const log = api.log;
+            const isSafeMode = api.state.safeMode;
+            const unsafe = api.unsafe;
 
-            // --- Layout ---
-            const list = document.createElement("div");
-            const details = document.createElement("div");
-            const filterBox = document.createElement("input");
+            const MAX_ENTRIES = 200;
+            const entries = [];
+            let viewRoot = null;
+            let listEl = null;
+            let detailEl = null;
 
-            filterBox.placeholder = "filter (url/method/status)…";
-            filterBox.style.width = "100%";
-            filterBox.style.marginBottom = "6px";
-            filterBox.style.background = "#111";
-            filterBox.style.color = "#fff";
-            filterBox.style.border = "1px solid #333";
-            filterBox.style.padding = "4px 6px";
+            function addEntry(e) {
+                // keep last MAX_ENTRIES
+                entries.push(e);
+                if (entries.length > MAX_ENTRIES) entries.shift();
+                renderList();
+            }
 
-            const container = document.createElement("div");
-            container.style.display = "flex";
-            container.style.gap = "6px";
-            container.style.height = "100%";
-
-            list.style.flex = "1";
-            list.style.overflowY = "auto";
-            list.style.borderRight = "1px solid #444";
-            list.style.paddingRight = "4px";
-
-            details.style.flex = "2";
-            details.style.overflowY = "auto";
-            details.style.paddingLeft = "4px";
-
-            container.append(list, details);
-
-            panel.append(filterBox, container);
-            ui.mountPanel("NETWORK", panel);
-
-            /***********************************************************
-             * RENDER FUNCTIONS
-             ***********************************************************/
             function renderList() {
-                list.innerHTML = "";
-                const f = filterBox.value.toLowerCase();
+                if (!listEl) return;
+                listEl.innerHTML = "";
+                if (!entries.length) {
+                    const empty = document.createElement("div");
+                    empty.className = "bdt-net-empty";
+                    empty.textContent = unsafe.isToolEnabled("networkInspector") && !isSafeMode()
+                        ? "No requests captured yet."
+                        : "Network inspector is locked. Disable SAFE + enable 'networkInspector' unsafe tool.";
+                    listEl.appendChild(empty);
+                    return;
+                }
 
-                requests.forEach(req => {
-                    const str = (
-                        req.method + " " +
-                        req.status + " " +
-                        req.url
-                    ).toLowerCase();
-
-                    if (f && !str.includes(f)) return;
-
+                entries.slice().reverse().forEach((e) => {
                     const row = document.createElement("div");
-                    row.style.padding = "4px 0";
-                    row.style.borderBottom = "1px solid #333";
-                    row.style.cursor = "pointer";
+                    row.className = "bdt-net-row";
 
-                    row.innerHTML =
-                        `<b>[${req.method}]</b> ${req.status} — <span style="color:#bbb">${req.url}</span><br>
-                         <span style="font-size:10px;color:#777">${req.time} • ${Math.round(req.duration)}ms</span>`;
+                    const statusClass =
+                        e.status >= 500 ? "err" :
+                        e.status >= 400 ? "warn" :
+                        e.status >= 300 ? "info" : "ok";
 
-                    row.onclick = () => renderDetails(req);
-                    list.appendChild(row);
+                    row.innerHTML = `
+                        <div class="bdt-net-row-line">
+                            <span class="bdt-net-badge bdt-net-${statusClass}">${e.method}</span>
+                            <span class="bdt-net-status">${e.status}</span>
+                            <span class="bdt-net-url" title="${e.url}">${e.url}</span>
+                        </div>
+                        <div class="bdt-net-row-meta">
+                            <span>${Math.round(e.duration)} ms</span>
+                            <span>${e.type}</span>
+                            <span>${new Date(e.time).toLocaleTimeString()}</span>
+                        </div>
+                    `;
+
+                    row.onclick = () => showDetails(e);
+                    listEl.appendChild(row);
                 });
-
-                list.scrollTop = list.scrollHeight;
             }
 
-            function renderDetails(req) {
-                details.innerHTML = `
-                    <h3 style="margin:4px 0;color:#ff2a2a">${req.method} ${req.url}</h3>
-                    <div>Status: <b>${req.status}</b></div>
-                    <div>Time: ${req.time}</div>
-                    <div>Duration: ${Math.round(req.duration)}ms</div>
-                    <hr style="margin:6px 0;border-color:#444">
+            function showDetails(e) {
+                if (!detailEl) return;
+                detailEl.innerHTML = "";
 
-                    <h4>Request Headers</h4>
-                    <pre style="white-space:pre-wrap">${req.headers ? JSON.stringify(req.headers,null,2) : "None"}</pre>
+                const gated = isSafeMode() || !unsafe.isToolEnabled("networkInspector");
 
-                    <h4>Response Headers</h4>
-                    <pre style="white-space:pre-wrap">${req.responseHeaders ? JSON.stringify(req.responseHeaders,null,2) : "None"}</pre>
+                const wrap = document.createElement("div");
+                wrap.className = "bdt-net-detail";
 
-                    <h4>Request Body</h4>
-                    <pre style="white-space:pre-wrap">${req.body || "None"}</pre>
+                const header = document.createElement("div");
+                header.className = "bdt-net-detail-header";
+                header.textContent = `${e.method} ${e.url}`;
+                wrap.appendChild(header);
 
-                    <h4>Response Preview</h4>
-                    <pre style="white-space:pre-wrap">${req.response || "[empty]"}</pre>
+                const meta = document.createElement("div");
+                meta.className = "bdt-net-detail-meta";
+                meta.innerHTML = `
+                    <div>Status: ${e.status}</div>
+                    <div>Type: ${e.type}</div>
+                    <div>Duration: ${Math.round(e.duration)} ms</div>
+                    <div>Started: ${new Date(e.time).toLocaleString()}</div>
                 `;
+                wrap.appendChild(meta);
 
-                // Replay button
-                const replayBtn = document.createElement("button");
-                replayBtn.textContent = "Replay Request";
-                replayBtn.style.marginTop = "8px";
-                replayBtn.style.padding = "4px 8px";
+                const bodyBox = document.createElement("div");
+                bodyBox.className = "bdt-net-detail-body";
 
-                replayBtn.onclick = () => replay(req);
-                details.appendChild(replayBtn);
+                if (gated) {
+                    bodyBox.textContent =
+                        "Body preview locked. Disable SAFE + enable 'networkInspector' unsafe tool to see response bodies.";
+                } else if (e.bodyPreview != null) {
+                    const pre = document.createElement("pre");
+                    pre.textContent = e.bodyPreview;
+                    bodyBox.appendChild(pre);
+                } else {
+                    bodyBox.textContent = "No body captured (binary/streaming or capture disabled).";
+                }
+
+                wrap.appendChild(bodyBox);
+                detailEl.appendChild(wrap);
             }
 
-            /***********************************************************
-             * REPLAY REQUEST
-             ***********************************************************/
-            async function replay(req) {
-                try {
-                    api.log.info("Replaying: " + req.method + " " + req.url);
+            /*********** HOOK FETCH ***********/
+            if (!window.__bjornNetworkFetchWrapped && typeof fetch === "function") {
+                window.__bjornNetworkFetchWrapped = true;
+                const origFetch = window.fetch;
+                window.fetch = async function (...args) {
+                    const start = performance.now();
+                    const url = (args[0] && args[0].url) || args[0];
+                    const method = (args[1] && args[1].method) || "GET";
+                    let res, error;
 
-                    const opts = {
-                        method: req.method,
-                        headers: {},
-                        body: req.body || undefined
-                    };
-
-                    // Build headers object
-                    if (req.headers) {
-                        req.headers.forEach(([k, v]) => {
-                            opts.headers[k] = v;
-                        });
+                    try {
+                        res = await origFetch.apply(this, args);
+                    } catch (e) {
+                        error = e;
                     }
 
-                    const res = await fetch(req.url, opts);
-                    api.log.info("Replay status: " + res.status);
-                } catch (e) {
-                    api.log.error("Replay failed: " + e);
-                }
+                    const end = performance.now();
+                    const duration = end - start;
+                    const time = Date.now();
+                    let bodyPreview = null;
+
+                    const canCapture =
+                        !isSafeMode() && unsafe.isToolEnabled("networkInspector");
+
+                    if (res && canCapture) {
+                        try {
+                            const clone = res.clone();
+                            const text = await clone.text();
+                            bodyPreview = text.length > 600 ? text.slice(0, 600) + "…" : text;
+                        } catch (_) {
+                            bodyPreview = null;
+                        }
+                    }
+
+                    addEntry({
+                        type: "fetch",
+                        method,
+                        url: String(url),
+                        status: res ? res.status : (error ? 0 : 0),
+                        duration,
+                        time,
+                        bodyPreview
+                    });
+
+                    if (error) throw error;
+                    return res;
+                };
+                log("[networkInspector] fetch hooked.");
             }
 
-            /***********************************************************
-             * LISTENERS
-             ***********************************************************/
-            on("request", () => renderList());
-            on("update", () => renderList());
-            filterBox.oninput = () => renderList();
+            /*********** HOOK XHR ***********/
+            if (!window.__bjornNetworkXHRWrapped && window.XMLHttpRequest) {
+                window.__bjornNetworkXHRWrapped = true;
 
-            renderList();
+                const origOpen = XMLHttpRequest.prototype.open;
+                const origSend = XMLHttpRequest.prototype.send;
+
+                XMLHttpRequest.prototype.open = function (method, url, async, user, password) {
+                    this.__bjornNetInfo = {
+                        method: method || "GET",
+                        url: String(url),
+                        startTime: 0
+                    };
+                    return origOpen.apply(this, arguments);
+                };
+
+                XMLHttpRequest.prototype.send = function (body) {
+                    const info = this.__bjornNetInfo || {};
+                    info.startTime = performance.now();
+
+                    this.addEventListener("loadend", () => {
+                        const end = performance.now();
+                        const duration = end - info.startTime;
+                        const time = Date.now();
+                        const status = this.status;
+
+                        let bodyPreview = null;
+                        const canCapture =
+                            !isSafeMode() && unsafe.isToolEnabled("networkInspector");
+
+                        if (canCapture) {
+                            try {
+                                const text = this.responseText;
+                                if (typeof text === "string") {
+                                    bodyPreview =
+                                        text.length > 600 ? text.slice(0, 600) + "…" : text;
+                                }
+                            } catch (_) {
+                                bodyPreview = null;
+                            }
+                        }
+
+                        addEntry({
+                            type: "xhr",
+                            method: info.method || "GET",
+                            url: info.url || "",
+                            status,
+                            duration,
+                            time,
+                            bodyPreview
+                        });
+                    });
+
+                    return origSend.apply(this, arguments);
+                };
+
+                log("[networkInspector] XHR hooked.");
+            }
+
+            // internal references for onMount
+            this._netEntries = entries;
+            this._renderList = renderList;
+            this._attachView = function (root) {
+                viewRoot = root;
+                listEl = root.querySelector(".bdt-net-list");
+                detailEl = root.querySelector(".bdt-net-detail-container");
+                this._renderList();
+            };
+
+            log("[networkInspector] Plugin loaded. Use 'unsafe' commands to unlock full inspector.");
+        },
+
+        onMount(view, api) {
+            // Build basic layout inside NETWORK tab
+            view.innerHTML = `
+                <div class="bdt-net-shell">
+                    <div class="bdt-net-header">
+                        <div class="bdt-net-title">Network Inspector</div>
+                        <div class="bdt-net-subtitle">
+                            Deep inspection is gated. Use 'unsafe' commands to unlock.
+                        </div>
+                    </div>
+                    <div class="bdt-net-body">
+                        <div class="bdt-net-list"></div>
+                        <div class="bdt-net-detail-container"></div>
+                    </div>
+                </div>
+            `;
+
+            // Attach view references
+            if (typeof this._attachView === "function") {
+                this._attachView(view);
+            }
+
+            // Inject a little CSS just for this panel (scoped)
+            if (!document.getElementById("bdt-net-styles")) {
+                const s = document.createElement("style");
+                s.id = "bdt-net-styles";
+                s.textContent = `
+                    .bdt-net-shell {
+                        display: flex;
+                        flex-direction: column;
+                        height: 100%;
+                        gap: 6px;
+                        font-size: 11px;
+                    }
+                    .bdt-net-header {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 2px;
+                        padding-bottom: 4px;
+                        border-bottom: 1px solid rgba(255,255,255,0.06);
+                    }
+                    .bdt-net-title {
+                        font-size: 12px;
+                        font-weight: 600;
+                        letter-spacing: 0.08em;
+                        text-transform: uppercase;
+                    }
+                    .bdt-net-subtitle {
+                        font-size: 10px;
+                        color: rgba(230,230,240,0.7);
+                    }
+                    .bdt-net-body {
+                        display: grid;
+                        grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr);
+                        gap: 8px;
+                        height: 100%;
+                        min-height: 0;
+                    }
+                    .bdt-net-list {
+                        border-right: 1px solid rgba(255,255,255,0.06);
+                        padding-right: 4px;
+                        overflow-y: auto;
+                    }
+                    .bdt-net-detail-container {
+                        overflow-y: auto;
+                        padding-left: 4px;
+                    }
+                    .bdt-net-empty {
+                        font-size: 11px;
+                        color: rgba(230,230,240,0.7);
+                        padding: 4px 0;
+                    }
+                    .bdt-net-row {
+                        padding: 4px 2px;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        margin-bottom: 2px;
+                    }
+                    .bdt-net-row:hover {
+                        background: rgba(255,255,255,0.04);
+                    }
+                    .bdt-net-row-line {
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                    }
+                    .bdt-net-badge {
+                        font-size: 9px;
+                        padding: 1px 5px;
+                        border-radius: 999px;
+                        text-transform: uppercase;
+                        letter-spacing: 0.12em;
+                    }
+                    .bdt-net-ok {
+                        background: rgba(70,255,136,0.2);
+                        color: #adffd0;
+                    }
+                    .bdt-net-info {
+                        background: rgba(100,164,255,0.2);
+                        color: #c3d7ff;
+                    }
+                    .bdt-net-warn {
+                        background: rgba(255,205,120,0.2);
+                        color: #ffe7b0;
+                    }
+                    .bdt-net-err {
+                        background: rgba(255,120,120,0.2);
+                        color: #ffd0d0;
+                    }
+                    .bdt-net-status {
+                        font-variant-numeric: tabular-nums;
+                        min-width: 34px;
+                    }
+                    .bdt-net-url {
+                        flex: 1;
+                        overflow: hidden;
+                        text-overflow: ellipsis;
+                        white-space: nowrap;
+                    }
+                    .bdt-net-row-meta {
+                        display: flex;
+                        gap: 10px;
+                        font-size: 9px;
+                        color: rgba(210,210,220,0.7);
+                        margin-top: 1px;
+                    }
+                    .bdt-net-detail {
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                        font-size: 11px;
+                    }
+                    .bdt-net-detail-header {
+                        font-size: 11px;
+                        font-weight: 600;
+                        word-break: break-all;
+                    }
+                    .bdt-net-detail-meta {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit,minmax(120px,1fr));
+                        gap: 2px 12px;
+                        font-size: 10px;
+                        color: rgba(230,230,240,0.8);
+                    }
+                    .bdt-net-detail-body {
+                        margin-top: 4px;
+                        padding: 4px;
+                        border-radius: 8px;
+                        background: rgba(0,0,0,0.45);
+                        max-height: 250px;
+                        overflow: auto;
+                    }
+                    .bdt-net-detail-body pre {
+                        white-space: pre-wrap;
+                        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                        font-size: 11px;
+                    }
+                `;
+                document.head.appendChild(s);
+            }
+
+            api.log("[networkInspector] View mounted in NETWORK tab.");
         }
     });
-
 })();
