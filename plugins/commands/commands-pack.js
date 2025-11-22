@@ -1,215 +1,167 @@
-// Bjorn Dev Tools — Commands Pack Plugin
-(function() {
-    if (!window.BjornDevTools) {
-        console.error("[BjornDevTools][CommandsPack] Core not loaded.");
-        return;
-    }
-
+// plugins/commands.js
+(function () {
     const DevTools = window.BjornDevTools;
-    const api = DevTools.api;
+    if (!DevTools || !DevTools.definePlugin) return;
 
-    // Register plugin
-    DevTools.plugins.register({
-        id: "commands",
-        title: "Command Pack",
+    DevTools.definePlugin("commands", {
+        // no tab, this plugin just extends the console
+        tab: null,
 
-        init(api) {
-            const cmd = DevTools.commands.register;
+        onLoad(api) {
+            const log = api.log;
+            const isSafeMode = api.state.safeMode;
+            const unsafe = api.unsafe;
 
-            /*******************************
-             * BASIC UTILITIES
-             *******************************/
-            cmd("clear", () => {
-                const root = api.ui.getPanelRoot("CONSOLE");
-                if (root) root.innerHTML = "";
-            }, "Clear console output");
+            /****************************
+             * SAFE COMMANDS
+             ****************************/
 
-            cmd("echo", (args) => {
-                api.log.info(args);
-            }, "Echo text");
-
-            cmd("log", (args) => {
-                api.log.info(args);
-            }, "Alias of echo");
-
-            /*******************************
-             * DOM COMMANDS
-             *******************************/
-            cmd("find", (selector) => {
-                const el = document.querySelector(selector);
-                if (!el) return api.log.warn("Not found: " + selector);
-                api.log.info("Found: " + selector);
-                api.log.info(el.outerHTML);
-            }, "Find element via selector");
-
-            cmd("highlight", (selector) => {
-                const el = document.querySelector(selector);
-                if (!el) return api.log.warn("Not found: " + selector);
-                api.dom.highlight(el);
-                api.log.info("Highlighted: " + selector);
-            }, "Highlight element");
-
-            cmd("copyhtml", (selector) => {
-                const el = document.querySelector(selector);
-                if (!el) return api.log.warn("Not found: " + selector);
-                navigator.clipboard.writeText(el.outerHTML);
-                api.log.info("Copied outerHTML of " + selector);
-            }, "Copy outerHTML to clipboard");
-
-            /*******************************
-             * STORAGE SHORTCUTS
-             *******************************/
-            cmd("ls.get", (key) => {
-                const v = localStorage.getItem(key);
-                api.log.info(key + " = " + v);
-            }, "localStorage get");
-
-            cmd("ls.set", (args) => {
-                const [key, ...rest] = args.split(" ");
-                localStorage.setItem(key, rest.join(" "));
-                api.log.info("localStorage set: " + key);
-            }, "localStorage set");
-
-            cmd("ls.del", (key) => {
-                localStorage.removeItem(key);
-                api.log.info("localStorage removed: " + key);
-            }, "localStorage delete");
-
-            cmd("ss.get", (key) => {
-                const v = sessionStorage.getItem(key);
-                api.log.info(key + " = " + v);
-            }, "sessionStorage get");
-
-            cmd("ss.set", (args) => {
-                const [key, ...rest] = args.split(" ");
-                sessionStorage.setItem(key, rest.join(" "));
-                api.log.info("sessionStorage set: " + key);
-            }, "sessionStorage set");
-
-            cmd("ss.del", (key) => {
-                sessionStorage.removeItem(key);
-                api.log.info("sessionStorage removed: " + key);
-            }, "sessionStorage delete");
-
-            /*******************************
-             * NETWORK SHORTCUTS
-             *******************************/
-            cmd("fetchtext", async (url) => {
-                try {
-                    const res = await fetch(url);
-                    const text = await res.text();
-                    api.log.info(text.substring(0, 2000));
-                } catch (e) {
-                    api.log.error("Fetch error: " + e);
+            // Switch active tab
+            api.commands.register("tab", (args) => {
+                const t = (args || "").trim().toUpperCase();
+                if (!t) {
+                    log("Usage: tab <CONSOLE|NETWORK|ELEMENTS|STORAGE|PERF|ADVANCED>");
+                    return;
                 }
-            }, "Fetch text and print");
+                api.ui.switchTab(t);
+            }, "Switch active DevTools tab.");
 
-            cmd("headers", async (url) => {
-                try {
-                    const res = await fetch(url);
-                    const h = [...res.headers.entries()];
-                    api.log.info(JSON.stringify(h, null, 2));
-                } catch (e) {
-                    api.log.error("Headers error: " + e);
-                }
-            }, "Fetch headers");
+            // Show plugin statuses
+            api.commands.register("plugins", () => {
+                const statuses = DevTools.plugins.statuses();
+                log("Plugins:");
+                Object.entries(statuses).forEach(([id, s]) => {
+                    log(`  ${id}  [${s.status}]  tab=${s.tab || "-"}${s.error ? "  err=" + s.error : ""}`);
+                });
+            }, "List plugin load status.");
 
-            cmd("ping", async (url) => {
-                const start = performance.now();
-                try {
-                    await fetch(url, { method: "HEAD" });
-                    const ms = Math.round(performance.now() - start);
-                    api.log.info("Ping: " + ms + "ms");
-                } catch (e) {
-                    api.log.error("Ping error: " + e);
-                }
-            }, "Ping a URL");
-
-            /*******************************
-             * EVAL + DEBUG
-             *******************************/
-            cmd("eval", (code) => {
-                if (api.state.safeMode()) {
-                    api.log.warn("Eval blocked in SAFE MODE");
+            // Basic fetch helper (safe)
+            api.commands.register("fetch", async (args) => {
+                const url = (args || "").trim();
+                if (!url) {
+                    log("Usage: fetch <url>");
                     return;
                 }
                 try {
-                    const out = Function("return (" + code + ")")();
-                    api.log.info(JSON.stringify(out, null, 2));
+                    const res = await fetch(url, { method: "GET" });
+                    const text = await res.text();
+                    log(`[fetch] ${res.status} ${res.statusText} (${url})`);
+                    const preview = text.length > 300 ? text.slice(0, 300) + "…" : text;
+                    log(preview);
                 } catch (e) {
-                    api.log.error("Eval error: " + e);
+                    log("[fetch] Error: " + e.message);
                 }
-            }, "Unsafe JS eval");
+            }, "HTTP GET and text body preview.");
 
-            cmd("time", (expr) => {
-                if (!expr) return api.log.warn("Usage: time <expression>");
-                const fn = new Function("return (" + expr + ")");
-                const t0 = performance.now();
+            // Inspect a DOM element
+            api.commands.register("inspect", (args) => {
+                const sel = (args || "").trim();
+                if (!sel) {
+                    log("Usage: inspect <css selector>");
+                    return;
+                }
+                const el = document.querySelector(sel);
+                if (!el) {
+                    log(`[inspect] No match for selector: ${sel}`);
+                    return;
+                }
+                const rect = el.getBoundingClientRect();
+                log(`[inspect] ${el.tagName.toLowerCase()}#${el.id || "-"}${el.className ? "." + String(el.className).trim().replace(/\s+/g, ".") : ""}`);
+                log(`  size: ${Math.round(rect.width)}x${Math.round(rect.height)}  at (${Math.round(rect.left)},${Math.round(rect.top)})`);
+                log("  outerHTML:");
+                const outer = el.outerHTML;
+                log("    " + outer.slice(0, 280) + (outer.length > 280 ? "…" : ""));
+            }, "Inspect first element that matches selector.");
+
+            // Highlight an element on screen
+            api.commands.register("highlight", (args) => {
+                const sel = (args || "").trim();
+                if (!sel) {
+                    log("Usage: highlight <css selector>");
+                    return;
+                }
+                const el = document.querySelector(sel);
+                if (!el) {
+                    log(`[highlight] No match for selector: ${sel}`);
+                    return;
+                }
+                api.dom.highlight(el);
+                log("[highlight] Element highlighted. Use 'highlight.clear' to remove.");
+            }, "Highlight an element.");
+
+            // Clear highlight
+            api.commands.register("highlight.clear", () => {
+                api.dom.clearHighlight();
+                log("[highlight] Cleared.");
+            }, "Clear highlight overlay.");
+
+            // Reload page
+            api.commands.register("page.reload", () => {
+                log("[page.reload] Reloading…");
+                location.reload();
+            }, "Reload the current page.");
+
+            /****************************
+             * THEME COMMAND (delegates to themes plugin if present)
+             ****************************/
+            api.commands.register("theme", (args) => {
+                const name = (args || "").trim();
+                if (!name) {
+                    log("Usage: theme <name>");
+                    log("Example: theme odin | theme dev | theme matrix (if themes plugin supports them)");
+                    return;
+                }
+                // If themes plugin exposes an api hook, use it
+                const themes = DevTools.plugins.registry["themes"]?.plugin;
+                if (themes && typeof themes.setTheme === "function") {
+                    try {
+                        themes.setTheme(name);
+                        log(`[theme] Switched to theme: ${name}`);
+                    } catch (e) {
+                        log("[theme] Error: " + e.message);
+                    }
+                } else {
+                    log("[theme] Themes plugin not available or does not expose setTheme(name).");
+                }
+            }, "Switch visual theme (delegated to themes plugin).");
+
+            /****************************
+             * UNSAFE COMMANDS (eval, etc)
+             ****************************/
+
+            // JS eval – gated by safe mode + unsafe.eval
+            api.commands.register("eval", (args) => {
+                const code = (args || "").trim();
+                if (!code) {
+                    log("Usage: eval <javascript>");
+                    return;
+                }
+
+                if (isSafeMode()) {
+                    log("[eval] SAFE mode is ON. Run 'safe off' then 'unsafe allow on' and 'unsafe on eval' to enable.");
+                    return;
+                }
+                if (!unsafe.isToolEnabled("eval")) {
+                    log("[eval] Unsafe 'eval' tool is OFF. Use 'unsafe list' then 'unsafe on eval'.");
+                    return;
+                }
+
                 try {
-                    fn();
-                    api.log.info("Took " + (performance.now() - t0).toFixed(2) + "ms");
+                    // eslint-disable-next-line no-eval
+                    const result = eval(code);
+                    log("[eval] Result: " + String(result));
                 } catch (e) {
-                    api.log.error("Time error: " + e);
+                    log("[eval] Error: " + e.message);
                 }
-            }, "Benchmark expression");
+            }, "Execute JavaScript (unsafe, gated).");
 
-            /*******************************
-             * PLUGIN UTILITIES
-             *******************************/
-            cmd("plugin.list", () => {
-                const statuses = DevTools.plugins.statuses();
-                Object.keys(statuses).forEach(id => {
-                    const s = statuses[id];
-                    api.log.info(`${id}: ${s.status}`);
-                });
-            }, "List plugins");
+            // Could add more unsafe commands later (profilers, mutation hooks, etc.)
 
-            cmd("plugin.status", () => {
-                const statuses = DevTools.plugins.statuses();
-                api.log.info(JSON.stringify(statuses, null, 2));
-            }, "Detailed plugin status");
+            log("[commands] Commands plugin loaded. Type 'help' + 'plugins' + 'unsafe' for more.");
+        },
 
-            cmd("plugin.reload", (id) => {
-                if (!id) return api.log.warn("Usage: plugin.reload <id>");
-                api.log.info("Reloading plugin: " + id);
-                // core command will reload all; specific reload comes later
-                DevTools.commands._execute("reloadPlugins");
-            }, "Reload a plugin");
-
-            /*******************************
-             * SAFE/UNSAFE TOOL CONTROLS
-             *******************************/
-            cmd("unsafe.list", () => {
-                api.unsafe.list();
-            }, "List unsafe tools");
-
-            cmd("unsafe.enable", (id) => {
-                api.unsafe.enable(id);
-            }, "Enable unsafe tool");
-
-            cmd("unsafe.disable", (id) => {
-                api.unsafe.disable(id);
-            }, "Disable unsafe tool");
-
-            /*******************************
-             * ENV INFO
-             *******************************/
-            cmd("env", () => {
-                api.log.info("UserAgent: " + navigator.userAgent);
-                api.log.info("Platform: " + navigator.platform);
-                api.log.info("Lang: " + navigator.language);
-                api.log.info("Screen: " + screen.width + "x" + screen.height);
-            }, "Show environment info");
-
-            cmd("ua", () => {
-                api.log.info(navigator.userAgent);
-            }, "UserAgent");
-
-            cmd("platform", () => {
-                api.log.info(navigator.platform);
-            }, "Platform");
-
-            api.log.info("[CommandsPack] initialized.");
+        onMount(view, api) {
+            // Commands plugin does not render into a specific tab; no-op here.
         }
     });
 })();
