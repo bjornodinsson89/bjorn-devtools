@@ -7,54 +7,70 @@
         tab: null, 
 
         onLoad(api) {
-            const root = api.ui.getRoot();
-            if (!root) return;
+            const STORAGE_KEY = "__bjorn_theme_v3";
 
-            const STORAGE_KEY = "__bjorn_theme";
+            // THEME DEFINITIONS
             const THEMES = {
-                odin: { name: "odin", label: "Odin", desc: "Warm amber, Norse forge." },
-                dev: { name: "dev", label: "Dev", desc: "Cool blue, standard." },
-                matrix: { name: "matrix", label: "Matrix", desc: "Green cyber rain." }
+                odin: { 
+                    label: "Odin (Default)", 
+                    vars: {
+                        '--bdt-bg': 'linear-gradient(145deg, rgba(10,10,18,0.96), rgba(30,16,10,0.97))',
+                        '--bdt-bg-header': 'rgba(255,166,90,0.05)',
+                        '--bdt-accent': '#ffb080',
+                        '--bdt-text': '#f5f5f5',
+                        '--bdt-text-dim': '#888',
+                        '--bdt-border': 'rgba(255,176,128,0.15)',
+                        '--bdt-font-body': 'system-ui, -apple-system, sans-serif',
+                        '--bdt-font-code': "'Menlo', 'Consolas', monospace"
+                    }
+                },
+                dev: { 
+                    label: "Dev Blue", 
+                    vars: {
+                        '--bdt-bg': 'linear-gradient(145deg, rgba(10,15,25,0.96), rgba(5,10,20,0.98))',
+                        '--bdt-bg-header': 'rgba(79, 172, 254, 0.05)',
+                        '--bdt-accent': '#4facfe',
+                        '--bdt-text': '#e0f0ff',
+                        '--bdt-text-dim': '#6daedb',
+                        '--bdt-border': 'rgba(79, 172, 254, 0.15)',
+                        '--bdt-font-body': "'Segoe UI', Roboto, Helvetica, sans-serif",
+                        '--bdt-font-code': "'Fira Code', 'Consolas', monospace"
+                    }
+                },
+                matrix: { 
+                    label: "Matrix", 
+                    vars: {
+                        '--bdt-bg': '#000000',
+                        '--bdt-bg-header': 'rgba(0, 255, 0, 0.1)',
+                        '--bdt-accent': '#00ff41',
+                        '--bdt-text': '#00ff41',
+                        '--bdt-text-dim': '#008f11',
+                        '--bdt-border': '#003300',
+                        '--bdt-font-body': '"Courier New", monospace',
+                        '--bdt-font-code': '"Courier New", monospace'
+                    }
+                },
+                terminal: { 
+                    label: "Retro Terminal", 
+                    vars: {
+                        '--bdt-bg': '#1a1a1a',
+                        '--bdt-bg-header': '#333',
+                        '--bdt-accent': '#ffcc00',
+                        '--bdt-text': '#ffcc00',
+                        '--bdt-text-dim': '#997700',
+                        '--bdt-border': '#555',
+                        '--bdt-font-body': '"Times New Roman", serif',
+                        '--bdt-font-code': '"Courier", monospace'
+                    }
+                }
             };
 
-            if (!document.getElementById("bdt-theme-styles")) {
-                const s = document.createElement("style");
-                s.id = "bdt-theme-styles";
-                s.textContent = `
-/* ODIN */
-.bdt-theme-odin .bdt-panel { background: linear-gradient(145deg, rgba(10,10,18,0.96), rgba(30,16,10,0.97)); }
-.bdt-theme-odin .bdt-header { border-bottom: 1px solid rgba(255,166,90,0.2); }
-.bdt-theme-odin .bdt-tab.active { color: #ffb085; }
-.bdt-theme-odin .bdt-tab.active::after { background: #ffb085; }
-
-/* DEV */
-.bdt-theme-dev .bdt-panel { background: linear-gradient(145deg, rgba(10,15,25,0.96), rgba(5,10,20,0.98)); }
-.bdt-theme-dev .bdt-header { border-bottom: 1px solid rgba(90,150,255,0.2); }
-.bdt-theme-dev .bdt-tab.active { color: #8ccfff; }
-.bdt-theme-dev .bdt-tab.active::after { background: #4facfe; }
-
-/* MATRIX */
-.bdt-theme-matrix .bdt-panel { background: linear-gradient(145deg, rgba(0,10,0,0.96), rgba(0,20,5,0.98)); }
-.bdt-theme-matrix .bdt-header { border-bottom: 1px solid rgba(0,255,0,0.2); }
-.bdt-theme-matrix .bdt-tab.active { color: #55ff55; }
-.bdt-theme-matrix .bdt-tab.active::after { background: #00ff00; }
-`;
-                document.head.appendChild(s);
-            }
-
-            // Internal apply function
-            const apply = (name) => {
-                const key = Object.keys(THEMES).find(k => k === name) || "odin";
-                Object.keys(THEMES).forEach(k => root.classList.remove("bdt-theme-" + k));
-                root.classList.add("bdt-theme-" + key);
+            // API
+            this.setTheme = (key) => {
+                const theme = THEMES[key] || THEMES.odin;
+                api.ui.setThemeVars(theme.vars);
                 localStorage.setItem(STORAGE_KEY, key);
-                return THEMES[key];
-            };
-
-            // Public API
-            this.setTheme = (name) => {
-                const t = apply(name);
-                api.log(`[Theme] Set to ${t.label}`);
+                api.log(`[Theme] Applied: ${theme.label}`);
             };
 
             this.next = () => {
@@ -64,8 +80,14 @@
                 this.setTheme(keys[nextIdx]);
             };
 
-            // Init
-            apply(localStorage.getItem(STORAGE_KEY));
+            api.commands.register("theme", (arg) => {
+                if(!arg) this.next();
+                else if(THEMES[arg]) this.setTheme(arg);
+                else api.log("Available: " + Object.keys(THEMES).join(", "));
+            }, "Switch themes");
+
+            const saved = localStorage.getItem(STORAGE_KEY);
+            if (saved) this.setTheme(saved);
         }
     });
 })();
