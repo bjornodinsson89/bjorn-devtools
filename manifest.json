@@ -1,0 +1,34 @@
+{
+  "core": [
+    "core/bjorn-devtools.js",
+    "core/unsafe-registry.js"
+  ],
+
+  "plugins": {
+    "builder": "plugins/builder.js",
+    "commands": "plugins/commands.js",
+    "debugger": "plugins/debugger.js",
+    "domInspector": "plugins/dom-inspector.js",
+    "networkInspector": "plugins/network-inspector.js",
+    "pluginManager": "plugins/plugin-manager.js",
+    "storageInspector": "plugins/storage-inspector.js",
+    "themes": "plugins/themes.js"
+  },
+
+  "extraPlugins": {
+    "layoutOverlay": "plugins-extra/layout-overlay.js",
+    "websocketMonitor": "plugins-extra/websocket-monitor.js",
+    "longtaskProfiler": "plugins-extra/longtask-profiler.js",
+    "eventListenerTracker": "plugins-extra/event-listener-tracker.js",
+    "scriptRunner": "plugins-extra/script-runner.js",
+    "networkInterceptor": "plugins-extra/network-interceptor.js",
+    "layoutThrashDetector": "plugins-extra/layout-thrash-detector.js",
+    "screenshotTool": "plugins-extra/screenshot-tool.js"
+  },
+
+  "unsafe": {
+    "scriptRunner": ["run", "save"],
+    "networkInterceptor": ["modify", "rewriteRequest", "rewriteResponse"],
+    "screenshotTool": ["capture"]
+  }
+}
