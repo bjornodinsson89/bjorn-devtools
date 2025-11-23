@@ -1,91 +1,70 @@
 // plugins/dom-inspector.js
-(function () {
-    const DevTools = window.BjornDevTools || arguments[0];
+(function(){
+    const DevTools = window.BjornDevTools;
     if (!DevTools) return;
 
     DevTools.registerPlugin("domInspector", {
+        name: "DOM",
         tab: "domInspector",
-        
-        onMount: function(view, api) {
-            // 1. Header
-            const header = api.dom.create("div", {
-                text: "🪄 DOM INSPECTOR",
-                style: { padding: "10px", fontWeight: "bold", color: "#e0d0ff", marginBottom: "5px" }
-            });
-            view.appendChild(header);
 
-            // 2. The Logic
-            const startInspection = () => {
-                api.ui.switchTab("CONSOLE");
-                api.log("👇 TAP any element on the page to get its Selector...");
-                
-                // Hide the panel so we can see the page
-                api.state.visible = false;
-                const root = document.querySelector(".bdt-panel");
-                if(root) root.classList.remove("bdt-open");
+        onLoad(api) {
+            this.api = api;
+            this.overlay = this.makeOverlay();
+        },
 
-                const handler = (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
+        makeOverlay() {
+            const o = document.createElement("div");
+            o.style.cssText = `
+                position:fixed;z-index:2147483646;pointer-events:none;
+                border:2px solid #6fb6ff;border-radius:4px;
+                box-shadow:0 0 10px rgba(111,182,255,0.6);
+                display:none;
+            `;
+            document.body.appendChild(o);
+            return o;
+        },
 
-                    // Calculate Selector
-                    let path = [];
-                    let el = e.target;
-                    while (el && el.nodeName !== 'HTML') {
-                        let sel = el.nodeName.toLowerCase();
-                        if (el.id) { sel += '#' + el.id; path.unshift(sel); break; } 
-                        else {
-                            if (el.className && typeof el.className === "string" && el.className.trim() !== "") {
-                                sel += '.' + el.className.trim().split(/\s+/).join('.');
-                            }
-                            path.unshift(sel);
-                            el = el.parentNode;
-                        }
-                    }
-                    const cssPath = path.join(" > ");
+        showOverlay(el) {
+            const r = el.getBoundingClientRect();
+            this.overlay.style.left = r.left + "px";
+            this.overlay.style.top = r.top + "px";
+            this.overlay.style.width = r.width + "px";
+            this.overlay.style.height = r.height + "px";
+            this.overlay.style.display = "block";
+        },
 
-                    // Re-open Panel
-                    api.state.visible = true;
-                    if(root) root.classList.add("bdt-open");
+        hideOverlay() { this.overlay.style.display = "none"; },
 
-                    api.log("--- 🎯 TARGET LOCKED ---");
-                    api.log(`Tag: <${e.target.tagName.toLowerCase()}>`);
-                    api.log(`Selector: ${cssPath}`);
-                    
-                    // Attempt highlight if API supports it, otherwise just log
-                    if(api.dom.highlight) api.dom.highlight(e.target);
-                    else e.target.style.outline = "2px solid red"; // Fallback
+        onMount(view) {
+            view.innerHTML = `
+                <button class="bdt-dom-pick">Start Picker</button>
+                <div class="bdt-dom-out" style="margin-top:8px;font-size:11px;"></div>
+            `;
 
-                    document.removeEventListener("click", handler, true);
-                };
+            const out = view.querySelector(".bdt-dom-out");
+            const pickBtn = view.querySelector(".bdt-dom-pick");
+            let picking = false;
 
-                // Listen once, capturing phase
-                document.addEventListener("click", handler, { capture: true, once: true });
+            pickBtn.onclick = () => {
+                picking = !picking;
+                pickBtn.textContent = picking ? "Stop Picker" : "Start Picker";
+                if (!picking) this.hideOverlay();
             };
 
-            // 3. Start Button
-            const btnWand = api.dom.create("button", {
-                text: "Start Selector Wand",
-                style: {
-                    width: "100%", padding: "15px", marginBottom: "8px",
-                    background: "linear-gradient(90deg, #443355, #2a2a35)", 
-                    color: "#e0d0ff", border: "1px solid #665588", borderRadius: "6px", fontWeight: "bold", cursor: "pointer"
-                },
-                on: { click: startInspection }
+            document.addEventListener("mousemove", (e) => {
+                if (!picking) return;
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (!el) return;
+                this.showOverlay(el);
+                out.textContent = this.describe(el);
             });
-            view.appendChild(btnWand);
-            
-            // 4. Clear Button
-            const btnClear = api.dom.create("button", {
-                text: "Clear Highlights",
-                style: { width: "100%", padding: "10px", background: "rgba(255,255,255,0.05)", color: "#ccc", border: "none", borderRadius: "4px", cursor: "pointer" },
-                on: { click: () => {
-                    if(api.dom.clearHighlight) api.dom.clearHighlight();
-                    // Fallback clear if api.dom.clearHighlight isn't in core
-                    document.querySelectorAll('*').forEach(el => el.style.outline = '');
-                }}
-            });
-            view.appendChild(btnClear);
+        },
+
+        describe(el) {
+            const tag = el.tagName.toLowerCase();
+            const id = el.id ? "#" + el.id : "";
+            const cls = el.className ? "." + el.className.trim().replace(/\s+/g, ".") : "";
+            return `${tag}${id}${cls}`;
         }
     });
 })();
