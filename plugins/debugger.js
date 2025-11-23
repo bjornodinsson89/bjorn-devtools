@@ -15,40 +15,28 @@
 
             // 1. CONSOLE SPY
             let spyActive = false;
-            const originalLog = console.log;
-            const originalErr = console.error;
-
             view.appendChild(api.dom.create("button", {
                 text: "🔌 Connect Console Spy",
                 style: { width: "100%", padding: "12px", marginBottom: "8px", background: "rgba(255,255,255,0.05)", color: "#ccc", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", cursor: "pointer" },
                 on: { click: (e) => {
-                    spyActive = !spyActive;
                     if (spyActive) {
-                        e.target.textContent = "✅ Spy Active"; e.target.style.color = "#3dff88"; e.target.style.borderColor = "#3dff88";
-                        console.log = (...a) => { api.log("📝 " + a.join(" ")); originalLog.apply(console, a); };
-                        console.error = (...a) => { api.log("❌ " + a.join(" ")); originalErr.apply(console, a); };
+                        // Turning off is fine
+                        spyActive = false;
+                        e.target.textContent = "🔌 Connect Console Spy"; e.target.style.color = "#ccc";
+                        location.reload(); // Usually safest to reload to unhook
                     } else {
-                        e.target.textContent = "🔌 Connect Console Spy"; e.target.style.color = "#ccc"; e.target.style.borderColor = "rgba(255,255,255,0.1)";
-                        console.log = originalLog; console.error = originalErr;
+                        api.ui.confirmDangerous(
+                            "Console Injection",
+                            "This wraps the native browser Console object.<br><br><b>Risk:</b> Some games check if the console has been tampered with. This is detectable by sophisticated anti-cheat.",
+                            "MEDIUM",
+                            () => {
+                                spyActive = true;
+                                e.target.textContent = "✅ Spy Active (Reload to clear)"; e.target.style.color = "#3dff88";
+                                const origLog = console.log;
+                                console.log = (...a) => { api.log("📝 " + a.join(" ")); origLog.apply(console, a); };
+                            }
+                        );
                     }
-                }}
-            }));
-
-            // 2. CSP SPY
-            let netActive = false;
-            view.appendChild(api.dom.create("button", {
-                text: "📡 CSP/Block Spy",
-                style: { width: "100%", padding: "12px", marginBottom: "8px", background: "rgba(255,255,255,0.05)", color: "#ccc", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", cursor: "pointer" },
-                on: { click: (e) => {
-                    netActive = !netActive;
-                    if (netActive) {
-                        e.target.textContent = "✅ CSP Spy Active"; e.target.style.color = "#3dff88";
-                        const origFetch = window.fetch;
-                        window.fetch = async (...args) => {
-                            try { const res = await origFetch(...args); return res; }
-                            catch (err) { api.log(`[Blocked] ❌ ${args[0]} - ${err.message}`); throw err; }
-                        };
-                    } else { e.target.textContent = "⚠️ Spy Active until Reload"; }
                 }}
             }));
         }
