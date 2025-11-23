@@ -1,28 +1,48 @@
 // plugins/themes.js
-(function () {
-    const DevTools = window.BjornDevTools || arguments[0];
+(function(){
+    const DevTools = window.BjornDevTools;
     if (!DevTools) return;
 
     DevTools.registerPlugin("themes", {
-        tab: null, 
+        name: "Themes",
+        tab: null,
+
         onLoad(api) {
+            const root = api.ui.getRoot();
+            const log = api.log;
+
             const THEMES = {
-                odin: { vars: { '--bdt-bg': '#121218', '--bdt-accent': '#ffb080', '--bdt-text': '#f5f5f5', '--bdt-border': 'rgba(255,255,255,0.1)' }},
-                matrix: { vars: { '--bdt-bg': '#000', '--bdt-accent': '#00ff41', '--bdt-text': '#00ff41', '--bdt-border': '#003300' }},
-                ocean: { vars: { '--bdt-bg': '#0f172a', '--bdt-accent': '#38bdf8', '--bdt-text': '#e2e8f0', '--bdt-border': '#1e293b' }}
+                odin: {
+                    "--bdt-bg": "#18130f",
+                    "--bdt-accent": "#ffae72",
+                    "--bdt-text": "#ffe7d0"
+                },
+                dev: {
+                    "--bdt-bg": "#0c1220",
+                    "--bdt-accent": "#6fb6ff",
+                    "--bdt-text": "#e6f0ff"
+                },
+                matrix: {
+                    "--bdt-bg": "#000800",
+                    "--bdt-accent": "#6fff88",
+                    "--bdt-text": "#c0ffc0"
+                }
             };
 
-            this.next = () => {
-                const keys = Object.keys(THEMES);
-                const current = localStorage.getItem("__bjorn_theme_idx") || 0;
-                const nextIdx = (parseInt(current) + 1) % keys.length;
-                
-                api.ui.setThemeVars(THEMES[keys[nextIdx]].vars);
-                localStorage.setItem("__bjorn_theme_idx", nextIdx);
-                api.log(`[Theme] ${keys[nextIdx]}`);
-            };
+            function apply(name) {
+                const vars = THEMES[name];
+                if (!vars) return log("Unknown theme.");
+                Object.entries(vars).forEach(([k, v]) => {
+                    root.style.setProperty(k, v);
+                });
+                log("Theme: " + name);
+            }
 
-            api.commands.register("theme", () => this.next(), "Cycle Theme");
-        }
+            api.commands.register("theme", name => apply(name.trim()), "Set theme");
+
+            log("[themes] ready");
+        },
+
+        onMount() {}
     });
 })();
