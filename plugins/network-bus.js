@@ -2,54 +2,57 @@
 (function(){
 const DT=window.BjornDevTools;if(!DT||!DT.registerPlugin)return;
 
-let L={requestStart:[],requestEnd:[]};
-function emit(t,p){(L[t]||[]).forEach(fn=>fn(p))}
-function on(t,fn){(L[t]||(L[t]=[])).push(fn)}
-
-/* FETCH */
-if(!window._bdtFetchPatched){
-window._bdtFetchPatched=true;
-const F=window.fetch.bind(window);
-window.fetch=function(i,n){
- const url=(typeof i==="string"?i:i.url),m=(n&&n.method)||"GET",s=performance.now();
- emit("requestStart",{url,method:m,start:s,type:"fetch"});
- return F(i,n).then(r=>{
-   emit("requestEnd",{url,method:m,start:s,end:performance.now(),ok:r.ok,type:"fetch"});
-   return r;
- }).catch(e=>{
-   emit("requestEnd",{url,method:m,start:s,end:performance.now(),ok:false,error:String(e),type:"fetch"});
-   throw e;
- });
-};
-}
-
-/* XHR */
-if(!window._bdtXHRPatched){
-window._bdtXHRPatched=true;
-const O=window.XMLHttpRequest;
-function X(){const x=new O();let rec=null;
- x.addEventListener("loadstart",()=>{
-   const url=x.responseURL||"",s=performance.now();
-   rec={url,method:x._bdtMethod||"GET",start:s};
-   emit("requestStart",rec);
- });
- x.addEventListener("loadend",()=>{
-   if(!rec)return;
-   rec.end=performance.now();
-   rec.ok=(x.status>=200&&x.status<400);
-   emit("requestEnd",rec);
- });
- return x;
-}
-X.prototype=O.prototype;
-window.XMLHttpRequest=X;
-const origOpen=O.prototype.open;
-O.prototype.open=function(m,u){this._bdtMethod=m;return origOpen.apply(this,arguments)};
-}
-
-/* REGISTER */
 DT.registerPlugin("networkBus",{
- name:"Network Bus",
- onLoad(api){api.networkBus={on}}
+ name:"NetworkBus",
+ api:null,
+ listeners:{start:[],end:[]},
+
+ onLoad(api){
+  this.api=api;
+
+  const sendStart=(info)=>{
+   for(const f of this.listeners.start)try{f(info)}catch{}
+  };
+  const sendEnd=(info)=>{
+   for(const f of this.listeners.end)try{f(info)}catch{}
+  };
+
+  const origFetch=window.fetch;
+  window.fetch=async(...args)=>{
+   const url=args[0];
+   const req={url,method:"GET",args,timestamp:performance.now()};
+   sendStart(req);
+   const res=await origFetch(...args);
+   sendEnd({url,status:res.status,timestamp:performance.now()});
+   return res;
+  };
+
+  const origOpen=XMLHttpRequest.prototype.open;
+  const origSend=XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open=function(m,u){
+   this._bdt={method:m,url:u,start:0};
+   return origOpen.apply(this,arguments);
+  };
+
+  XMLHttpRequest.prototype.send=function(b){
+   const info=this._bdt;
+   info.start=performance.now();
+   sendStart(info);
+
+   this.addEventListener("loadend",()=>{
+    sendEnd({...info,status:this.status,time:performance.now()-info.start});
+   });
+
+   return origSend.apply(this,arguments);
+  };
+
+  api.networkBus={
+   on:(ev,fn)=>{
+    if(ev==="requestStart")this.listeners.start.push(fn);
+    if(ev==="requestEnd")this.listeners.end.push(fn);
+   }
+  };
+ }
 });
 })();
