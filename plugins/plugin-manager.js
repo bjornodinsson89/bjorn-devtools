@@ -1,7 +1,7 @@
 // plugins/plugin-manager.js
 (function () {
     const DevTools = window.BjornDevTools;
-    if (!DevTools) return;
+    if (!DevTools || !DevTools.registerPlugin) return;
 
     DevTools.registerPlugin("pluginManager", {
         name: "Plugins",
@@ -9,84 +9,134 @@
 
         onLoad(api) {
             this.api = api;
-            this.registry = DevTools.plugins.registry;
+            this.registry = DevTools.plugins && DevTools.plugins.registry
+                ? DevTools.plugins.registry
+                : {};
+            api.log && api.log("[pluginManager] ready");
+        },
 
-            api.commands.register("plugin.disable", (id) => {
-                const rec = this.registry[id];
-                if (!rec) return api.log("Unknown plugin: " + id);
-                rec.disabled = true;
-                api.log("Disabled: " + id);
-                DevTools.api.ui.switchTab("CONSOLE");
-                this.render && this.render();
-            });
-
-            api.commands.register("plugin.enable", (id) => {
-                const rec = this.registry[id];
-                if (!rec) return api.log("Unknown plugin: " + id);
-                rec.disabled = false;
-                api.log("Enabled: " + id);
-                this.render && this.render();
-            });
-
-            api.commands.register("plugin.reload", (id) => {
-                const rec = this.registry[id];
-                if (!rec) return api.log("Unknown plugin: " + id);
-                api.log("Reloading: " + id);
-                rec.plugin = null;
-                DevTools.plugins.load({ id, src: rec.src });
-            });
-
-            api.log("[pluginManager] ready");
+        onUnload() {
+            // no global hooks to drop yet
         },
 
         onMount(view) {
-            view.innerHTML = `<div class="bdt-pm-list" style="font-size:11px;"></div>`;
+            view.innerHTML = `<div class="bdt-pm-list" style="padding:10px;"></div>`;
             const list = view.querySelector(".bdt-pm-list");
 
-            this.render = () => {
-                list.innerHTML = "";
-                Object.values(this.registry).forEach(rec => {
-                    const row = document.createElement("div");
-                    row.style.cssText = `
-                        padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.08);
-                        display:flex;justify-content:space-between;`;
+            const renderRow = (rec) => {
+                const row = document.createElement("div");
+                row.style.cssText = `
+                    padding: 10px;
+                    border-bottom: 1px solid rgba(255,255,255,0.05);
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    font-family: var(--bdt-font-ui, system-ui);
+                    font-size: 13px;
+                    color: var(--bdt-text,#fff);
+                `;
 
-                    row.innerHTML = `
-                        <div>
-                            <span style="color:${rec.disabled ? "#f55" : "#3dff88"};">●</span>
-                            <b>${rec.id}</b> <span style="opacity:0.6;">[${rec.status}]</span>
-                        </div>
+                const statusColor = rec.disabled
+                    ? "#ef5350"
+                    : (rec.status === "loaded" ? "#66bb6a" :
+                       rec.status === "pending" ? "#ffa726" :
+                       "#ef5350");
+
+                row.innerHTML = `
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="color:${statusColor};font-size:16px;">●</span>
+                        <span style="font-weight:600;">${rec.id}</span>
+                        <span style="opacity:0.5;font-size:11px;font-family:monospace;">[${rec.status}]</span>
+                        ${rec.disabled ? `<span style="opacity:0.7;font-size:10px;margin-left:4px;">(disabled)</span>` : ""}
+                    </div>
+                `;
+
+                const controls = document.createElement("div");
+                controls.style.cssText = "display:flex;gap:8px;";
+
+                const makeBtn = (txt, color, onClick) => {
+                    const b = document.createElement("button");
+                    b.textContent = txt;
+                    b.style.cssText = `
+                        padding: 4px 10px;
+                        background: rgba(255,255,255,0.05);
+                        color: ${color};
+                        border: 1px solid rgba(255,255,255,0.12);
+                        border-radius: 4px;
+                        font-size: 11px;
+                        cursor: pointer;
+                        transition: background 0.15s ease, transform 0.1s ease;
                     `;
+                    b.onmouseover = () => { b.style.background = "rgba(255,255,255,0.12)"; };
+                    b.onmouseout = () => { b.style.background = "rgba(255,255,255,0.05)"; };
+                    b.onclick = () => {
+                        try { onClick(); }
+                        catch (e) {
+                            this.api && this.api.log && this.api.log(`[pluginManager] ${txt} error: ${e.message}`);
+                        }
+                    };
+                    return b;
+                };
 
-                    const c = document.createElement("div");
-                    c.style.cssText = "display:flex;gap:6px;";
+                // Reload button
+                controls.appendChild(makeBtn("Reload", "#64b5f6", () => {
+                    if (!DevTools.plugins || !DevTools.plugins.load) {
+                        this.api.log && this.api.log("pluginManager: plugins.load is not available.");
+                        return;
+                    }
+                    this.api.log && this.api.log(`Reloading ${rec.id}...`);
 
-                    const mk = (txt,fn) => {
-                        const b = document.createElement("button");
-                        b.textContent = txt;
-                        b.style.cssText = `
-                            padding:2px 6px;background:#000;color:#ddd;border:1px solid #444;
-                            border-radius:4px;font-size:10px;cursor:pointer;`;
-                        b.onclick = fn;
-                        return b;
+                    const meta = {
+                        id: rec.id,
+                        src: rec.src || (DevTools.plugins.defaults || []).find(p => p.id === rec.id)?.src || rec.src
                     };
 
-                    c.appendChild(mk("Reload", () => {
-                        rec.plugin=null;
-                        DevTools.plugins.load({ id:rec.id, src:rec.src });
-                    }));
+                    if (!meta.src) {
+                        this.api.log && this.api.log(`No src found for plugin '${rec.id}', cannot reload.`);
+                        return;
+                    }
 
-                    c.appendChild(mk(rec.disabled?"Enable":"Disable", () => {
-                        rec.disabled=!rec.disabled;
-                        this.render();
-                    }));
+                    DevTools.plugins.unload(rec.id);
 
-                    row.appendChild(c);
-                    list.appendChild(row);
+                    rec.status = "pending";
+                    rec.plugin = null;
+
+                    DevTools.plugins.load(meta).then(() => {
+                        this.api.log && this.api.log(`Reloaded: ${rec.id}`);
+                        this.render(list);
+                    });
+                }));
+
+                // Enable / Disable toggle
+                controls.appendChild(makeBtn(
+                    rec.disabled ? "Enable" : "Disable",
+                    rec.disabled ? "#66bb6a" : "#ef5350",
+                    () => {
+                        if (!rec.disabled) {
+                            DevTools.plugins.unload(rec.id);
+                        }
+                        rec.disabled = !rec.disabled;
+                        this.render(list);
+                    }
+                ));
+
+                row.appendChild(controls);
+                return row;
+            };
+
+            this.render = (container) => {
+                container.innerHTML = "";
+                const values = Object.values(this.registry || {});
+                if (!values.length) {
+                    container.innerHTML = `<div style="opacity:0.6;">No plugins registered.</div>`;
+                    return;
+                }
+                values.forEach(rec => {
+                    container.appendChild(renderRow(rec));
                 });
             };
 
-            this.render();
+            this.render(list);
         }
     });
 })();
