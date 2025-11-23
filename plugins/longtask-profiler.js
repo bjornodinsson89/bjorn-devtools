@@ -1,58 +1,26 @@
-// plugins/longtask-profiler.js
+// longtask-profiler.js (HEADLESS)
 (function(){
-    const DevTools=window.BjornDevTools;
-    if(!DevTools)return;
+const DT=window.BjornDevTools;if(!DT||!DT.registerPlugin)return;
 
-    DevTools.registerPlugin("longtaskProfiler",{
-        name:"Long Tasks",
-        tab:"longtaskProfiler",
+DT.registerPlugin("longtaskProfiler",{
+ name:"Long Tasks",
+ tasks:[],
+ api:null,
 
-        onLoad(api){
-            this.api=api;
-            this.logs=[];
-            this.render=null;
-            this.running=false;
+ onLoad(api){
+  this.api=api;
+  api.unsafe.register("longtaskProfiler","Long task monitoring");
 
-            api.commands.register("longtasks.on",()=>this.on(),"Start long task detector");
-            api.commands.register("longtasks.off",()=>this.off(),"Stop long task detector");
-            api.log("[longtaskProfiler] ready");
-        },
+  const obs=new PerformanceObserver(list=>{
+   for(const e of list.getEntries()){
+    if(e.duration>50){
+     this.tasks.push({dur:e.duration,ts:Date.now()});
+     this.api.log("[longtask] "+e.duration.toFixed(1)+"ms");
+    }
+   }
+  });
 
-        on(){
-            if(this.running)return;
-            this.running=true;
-            let last=performance.now();
-            const tick=()=>{
-                if(!this.running)return;
-                const now=performance.now();
-                const drift=now-last-50;
-                last=now;
-                if(drift>20){
-                    this.logs.push({time:new Date(),delay:drift});
-                    this.render && this.render();
-                }
-                setTimeout(tick,50);
-            };
-            tick();
-            this.api.log("Long task detection ON.");
-        },
-
-        off(){
-            this.running=false;
-            this.api.log("Long task detection OFF.");
-        },
-
-        onMount(view){
-            view.innerHTML=`<div class="bdt-lt" style="font-size:11px;"></div>`;
-            const box=view.querySelector(".bdt-lt");
-            this.render=()=>{
-                box.innerHTML="";
-                this.logs.slice(-100).forEach(x=>{
-                    const d=document.createElement("div");
-                    d.textContent=`Lag: ${x.delay.toFixed(1)}ms @ ${x.time.toLocaleTimeString()}`;
-                    box.appendChild(d);
-                });
-            };
-            this.render();
-        }
-    });
+  try{obs.observe({entryTypes:["longtask"]})}catch(e){}
+ }
+});
+})();
