@@ -5,11 +5,8 @@
 
     DevTools.definePlugin("themes", {
         tab: null, 
-
         onLoad(api) {
             const STORAGE_KEY = "__bjorn_theme_v3";
-
-            // THEME DEFINITIONS
             const THEMES = {
                 odin: { 
                     label: "Odin (Default)", 
@@ -65,7 +62,6 @@
                 }
             };
 
-            // API
             this.setTheme = (key) => {
                 const theme = THEMES[key] || THEMES.odin;
                 api.ui.setThemeVars(theme.vars);
