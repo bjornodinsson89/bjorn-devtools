@@ -1,4 +1,4 @@
-// plugins/dom-inspector.js
+// plugins/dom-inspector.js — patched for shadow-safety
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -12,6 +12,13 @@
             this.overlay = this.createOverlay();
             this.picking = false;
             this.boundMove = null;
+            this.boundClick = null;
+
+            this.isDevtoolsElement = (el) => {
+                if (!el || !el.getRootNode) return false;
+                const root = el.getRootNode();
+                return !!(root && root.host && root.host.id === "bjorn-devtools-host");
+            };
 
             api.commands.register("dom.pick", () => {
                 this.startPicker();
@@ -66,32 +73,52 @@
 
             this.boundMove = (e) => {
                 const el = document.elementFromPoint(e.clientX, e.clientY);
-                if (el) this.showOverlay(el);
+                if (!el) {
+                    this.hideOverlay();
+                    return;
+                }
+                if (this.isDevtoolsElement(el)) {
+                    this.hideOverlay();
+                    return;
+                }
+                this.showOverlay(el);
             };
 
             document.addEventListener("mousemove", this.boundMove, { passive: true });
 
-            document.addEventListener(
-                "click",
-                this.boundClick = (e) => {
-                    if (!this.picking) return;
-                    e.preventDefault();
-                    e.stopPropagation();
+            this.boundClick = (e) => {
+                if (!this.picking) return;
 
-                    const el = document.elementFromPoint(e.clientX, e.clientY);
-                    if (el) this.selectElement(el);
-                    this.stopPicker();
-                },
-                { capture: true }
-            );
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                if (this.isDevtoolsElement(el)) {
+                    // Ignore clicks on DevTools UI entirely.
+                    e.stopPropagation();
+                    e.preventDefault();
+                    return;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (el) this.selectElement(el);
+                this.stopPicker();
+            };
+
+            document.addEventListener("click", this.boundClick, true);
         },
 
         stopPicker() {
             if (!this.picking) return;
             this.picking = false;
 
-            document.removeEventListener("mousemove", this.boundMove);
-            document.removeEventListener("click", this.boundClick, true);
+            if (this.boundMove) {
+                document.removeEventListener("mousemove", this.boundMove);
+                this.boundMove = null;
+            }
+            if (this.boundClick) {
+                document.removeEventListener("click", this.boundClick, true);
+                this.boundClick = null;
+            }
             this.hideOverlay();
         },
 
@@ -100,6 +127,10 @@
         ===========================================================*/
         selectElement(el) {
             if (!this.renderDetail) return;
+            if (this.isDevtoolsElement(el)) {
+                this.api.log("Selected element is inside DevTools UI; ignoring.");
+                return;
+            }
 
             this.currentElement = el;
             this.renderDetail(el);
