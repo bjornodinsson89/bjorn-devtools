@@ -1,0 +1,82 @@
+// plugins/network-interceptor.js
+(function(){
+    const DevTools=window.BjornDevTools;
+    if(!DevTools)return;
+
+    // unsafe: modifying network traffic
+    DevTools.unsafe.register("networkInterceptor", ["modify","rewriteRequest","rewriteResponse"]);
+
+    DevTools.registerPlugin("networkInterceptor",{
+        name:"Interceptor",
+        tab:"networkInterceptor",
+
+        onLoad(api){
+            this.api=api;
+            this.rules=[];
+            this.render=null;
+
+            api.commands.register("intercept.add",(json)=>{
+                if(!api.ensureUnsafe("networkInterceptor.modify")) return;
+                try{
+                    const rule=JSON.parse(json);
+                    this.rules.push(rule);
+                    api.log("Rule added.");
+                    this.render && this.render();
+                }catch(e){ api.log("ERR: "+e.message); }
+            });
+
+            if(!window.__bdt_intercept_patch__){
+                window.__bdt_intercept_patch__=true;
+                const orig=window.fetch;
+                const self=this;
+
+                window.fetch = async function(url,opt={}){
+
+                    // modify request
+                    self.rules.forEach(r=>{
+                        if(r.url && url.includes(r.url)){
+                            if(r.method && r.method !== (opt.method||"GET")) return;
+
+                            if(r.modifyRequest){
+                                const m=r.modifyRequest;
+                                if(m.url) url=m.url;
+                                if(m.headers) opt.headers = Object.assign({},opt.headers,m.headers);
+                            }
+                        }
+                    });
+
+                    let res = await orig(url,opt);
+                    let txt = await res.clone().text();
+
+                    // modify response
+                    self.rules.forEach(r=>{
+                        if(r.url && url.includes(r.url)){
+                            if(r.modifyResponse && r.modifyResponse.replace){
+                                const rr = r.modifyResponse;
+                                txt = txt.replace(new RegExp(rr.replace,"g"), rr.with || "");
+                            }
+                        }
+                    });
+
+                    return new Response(txt,res);
+                };
+            }
+
+            api.log("[networkInterceptor] ready");
+        },
+
+        onMount(view){
+            view.innerHTML=`
+                <div style="font-size:11px;">Use: intercept.add {"url":"...","modifyResponse":{"replace":"a","with":"b"}}</div>
+                <div class="bdt-ni" style="font-size:11px;margin-top:6px;"></div>
+            `;
+            const box=view.querySelector(".bdt-ni");
+            this.render=()=>{
+                box.innerHTML=this.rules
+                    .map((r,i)=>`${i+1}. ${JSON.stringify(r)}`)
+                    .join("<br>");
+            };
+            this.render();
+        }
+    });
+})();
