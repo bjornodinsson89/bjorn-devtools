@@ -1,4 +1,4 @@
-// plugins/storage-inspector.js
+// plugins/storage-inspector.js — patched cookie handling
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -14,19 +14,67 @@
                 if (!api.ensureUnsafe("storage.clear")) return;
                 target = (target || "").toLowerCase();
 
-                if (target === "local") { localStorage.clear(); api.log("localStorage cleared."); }
-                else if (target === "session") { sessionStorage.clear(); api.log("sessionStorage cleared."); }
-                else if (target === "cookies") { document.cookie.split(";").forEach(c => document.cookie = c.replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/")); api.log("Cookies cleared."); }
-                else api.log("Usage: storage.clear <local|session|cookies>");
+                if (target === "local") {
+                    try {
+                        localStorage.clear();
+                        api.log("localStorage cleared.");
+                    } catch (e) {
+                        api.log("ERR: unable to clear localStorage (blocked by browser).");
+                    }
+                } else if (target === "session") {
+                    try {
+                        sessionStorage.clear();
+                        api.log("sessionStorage cleared.");
+                    } catch (e) {
+                        api.log("ERR: unable to clear sessionStorage (blocked by browser).");
+                    }
+                } else if (target === "cookies") {
+                    this.clearAllCookies();
+                } else {
+                    api.log("Usage: storage.clear <local|session|cookies>");
+                }
             }, "Clear storage bucket (UNSAFE)");
 
             api.log("[storageInspector] ready");
         },
 
-        safeCheck() {
-            return this.api.state.safe();
+        /*===========================================================
+        =  COOKIE HELPERS
+        ===========================================================*/
+        clearAllCookies() {
+            try {
+                const cookies = document.cookie.split(";");
+                const exp = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+                cookies.forEach(c => {
+                    const idx = c.indexOf("=");
+                    if (idx === -1) return;
+                    const name = c.slice(0, idx).trim();
+
+                    // Best-effort: default path and root path
+                    document.cookie = `${name}=;expires=${exp};path=/`;
+                    document.cookie = `${name}=;expires=${exp};path=`;
+                });
+
+                this.api.log("Cookies cleared (best-effort).");
+            } catch (e) {
+                this.api.log("ERR: unable to clear cookies (blocked by browser).");
+            }
         },
 
+        clearCookieByName(name) {
+            try {
+                const exp = "Thu, 01 Jan 1970 00:00:00 GMT";
+                document.cookie = `${name}=;expires=${exp};path=/`;
+                document.cookie = `${name}=;expires=${exp};path=`;
+            } catch (e) {
+                this.api.log("ERR: unable to delete cookie: " + name);
+            }
+        },
+
+        /*===========================================================
+        =  ON MOUNT
+        ===========================================================*/
         onMount(view) {
             view.innerHTML = `
                 <div style="display:flex;gap:6px;margin-bottom:6px;">
@@ -124,13 +172,11 @@
             const right = document.createElement("div");
             right.style.cssText = "display:flex;gap:6px;";
 
-            /* Edit button */
             const edit = document.createElement("button");
             edit.textContent = "Edit";
             edit.style.cssText = this.btnStyle();
             edit.onclick = () => this.editKey(k, v);
 
-            /* Delete button */
             const del = document.createElement("button");
             del.textContent = "Del";
             del.style.cssText = this.btnStyle();
@@ -153,9 +199,15 @@
 
             if (!this.api.ensureUnsafe("storage.write")) return;
 
-            if (this.mode === "local") localStorage.setItem(key, value);
-            if (this.mode === "session") sessionStorage.setItem(key, value);
-            if (this.mode === "cookie") document.cookie = `${key}=${value}; path=/`;
+            try {
+                if (this.mode === "local") localStorage.setItem(key, value);
+                if (this.mode === "session") sessionStorage.setItem(key, value);
+                if (this.mode === "cookie") {
+                    document.cookie = `${key}=${value}; path=/`;
+                }
+            } catch (e) {
+                this.api.log("ERR: unable to write storage (blocked by browser).");
+            }
 
             this.render();
         },
@@ -169,10 +221,14 @@
             const newVal = prompt("Edit value:", v);
             if (newVal === null) return;
 
-            if (this.mode === "local") localStorage.setItem(k, newVal);
-            if (this.mode === "session") sessionStorage.setItem(k, newVal);
-            if (this.mode === "cookie") {
-                document.cookie = `${k}=${newVal}; path=/`;
+            try {
+                if (this.mode === "local") localStorage.setItem(k, newVal);
+                if (this.mode === "session") sessionStorage.setItem(k, newVal);
+                if (this.mode === "cookie") {
+                    document.cookie = `${k}=${newVal}; path=/`;
+                }
+            } catch (e) {
+                this.api.log("ERR: unable to edit storage (blocked by browser).");
             }
 
             this.render();
@@ -184,10 +240,14 @@
         delKey(k) {
             if (!this.api.ensureUnsafe("storage.delete")) return;
 
-            if (this.mode === "local") localStorage.removeItem(k);
-            if (this.mode === "session") sessionStorage.removeItem(k);
-            if (this.mode === "cookie") {
-                document.cookie = `${k}=;expires=${new Date(0).toUTCString()};path=/`;
+            try {
+                if (this.mode === "local") localStorage.removeItem(k);
+                if (this.mode === "session") sessionStorage.removeItem(k);
+                if (this.mode === "cookie") {
+                    this.clearCookieByName(k);
+                }
+            } catch (e) {
+                this.api.log("ERR: unable to delete from storage (blocked by browser).");
             }
 
             this.render();
