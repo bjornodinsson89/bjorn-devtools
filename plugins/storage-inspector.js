@@ -1,45 +1,83 @@
-(function () {
+// plugins/storage-inspector.js
+(function(){
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
 
     DevTools.registerPlugin("storageInspector", {
+        name: "Storage",
         tab: "storageInspector",
-        
-        onMount(view, api) {
+
+        onLoad(api) { this.api = api; },
+
+        onMount(view) {
             view.innerHTML = `
-                <div style="display:flex; gap:10px; margin-bottom:10px;">
-                    <button id="bdt-st-local" style="flex:1; background:#333; border:none; color:#fff; padding:5px; border-radius:4px;">Local</button>
-                    <button id="bdt-st-session" style="flex:1; background:#333; border:none; color:#fff; padding:5px; border-radius:4px;">Session</button>
-                    <button id="bdt-st-refresh" style="width:30px; background:#444; border:none; color:#fff; border-radius:4px;">↻</button>
+                <div style="display:flex;gap:8px;margin-bottom:8px;">
+                    <button class="bdt-s-btn" data-s="local">LocalStorage</button>
+                    <button class="bdt-s-btn" data-s="session">SessionStorage</button>
+                    <button class="bdt-s-btn" data-s="cookie">Cookies</button>
                 </div>
-                <div id="bdt-st-list" style="font-size:10px; font-family:monospace;"></div>
+                <input class="bdt-s-filter" placeholder="Search key">
+                <div class="bdt-s-list"></div>
             `;
 
-            const list = view.querySelector("#bdt-st-list");
-            
-            const render = (type) => {
-                list.innerHTML = "";
-                const store = (type === 'session') ? sessionStorage : localStorage;
-                if(store.length === 0) { list.innerHTML = "<div style='color:#666'>Empty</div>"; return; }
-                
-                for(let i=0; i<store.length; i++) {
-                    const k = store.key(i);
-                    const v = store.getItem(k);
-                    const row = document.createElement("div");
-                    row.style.cssText = "padding:4px; border-bottom:1px solid rgba(255,255,255,0.05); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
-                    row.innerHTML = `<span style="color:var(--bdt-accent)">${k}</span>: <span style="color:#888">${v}</span>`;
-                    row.onclick = () => {
-                        if(confirm(`Delete ${k}?`)) { store.removeItem(k); render(type); }
-                    };
-                    list.appendChild(row);
-                }
-            };
+            const list = view.querySelector(".bdt-s-list");
+            const filter = view.querySelector(".bdt-s-filter");
+            const btns = view.querySelectorAll(".bdt-s-btn");
 
-            view.querySelector("#bdt-st-local").onclick = () => render('local');
-            view.querySelector("#bdt-st-session").onclick = () => render('session');
-            view.querySelector("#bdt-st-refresh").onclick = () => render('local');
-            
-            render('local');
+            let mode = "local";
+
+            btns.forEach(b => b.addEventListener("click", () => {
+                mode = b.dataset.s;
+                this.render(list, filter.value, mode);
+            }));
+
+            filter.addEventListener("input", () => {
+                this.render(list, filter.value, mode);
+            });
+
+            this.render(list, "", mode);
+        },
+
+        render(list, search, mode) {
+            search = search.toLowerCase();
+            list.innerHTML = "";
+
+            let data = [];
+
+            try {
+                if (mode === "local") {
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const k = localStorage.key(i);
+                        const v = localStorage.getItem(k);
+                        data.push({ k, v });
+                    }
+                }
+                if (mode === "session") {
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const k = sessionStorage.key(i);
+                        const v = sessionStorage.getItem(k);
+                        data.push({ k, v });
+                    }
+                }
+                if (mode === "cookie") {
+                    document.cookie.split(";").forEach(c => {
+                        const [k,v] = c.split("=").map(x=>x.trim());
+                        data.push({ k, v });
+                    });
+                }
+            } catch (e) {
+                list.textContent = "Blocked (sandbox / CSP).";
+                return;
+            }
+
+            data
+               .filter(e => e.k.toLowerCase().includes(search))
+               .forEach(e => {
+                   const row = document.createElement("div");
+                   row.style.cssText = "padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.04)";
+                   row.textContent = e.k + " = " + e.v;
+                   list.appendChild(row);
+               });
         }
     });
 })();
