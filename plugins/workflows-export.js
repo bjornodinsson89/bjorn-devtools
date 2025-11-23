@@ -1,91 +1,61 @@
-// File: plugins/workflows-export.js
+// workflows-export.js
 (function(){
-    const DevTools = window.BjornDevTools;
-    if (!DevTools || !DevTools.registerPlugin) return;
+const DT=window.BjornDevTools;if(!DT||!DT.registerPlugin)return;
 
-    DevTools.registerPlugin("workflows",{
-        name:"Workflows",
-        tab:"workflows",
+DT.registerPlugin("workflows",{
+ name:"Workflows",
+ tab:"Workflows",
+ api:null,
+ view:null,
 
-        onLoad(api){
-            this.api = api;
-        },
+ onLoad(api){
+  this.api=api;
+  api.unsafe.register("workflows","Export/Import");
+ },
 
-        exportJSON(data, filename){
-            const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-            const url = URL.createObjectURL(blob);
-            const a=document.createElement("a");
-            a.href=url;
-            a.download=filename||"bjorn-export.json";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(()=>URL.revokeObjectURL(url),1000);
-        },
+ onMount(v){
+  this.view=v;
+  v.innerHTML=`
+   <button class='wf-exp'>Export JSON</button>
+   <input type='file' class='wf-imp' style='margin-left:10px;'>
+   <pre class='wf-out'></pre>`;
+  this.out=v.querySelector(".wf-out");
 
-        onMount(view){
-            this.view=view;
-            view.innerHTML=`
-              <div style="font-family:var(--bdt-code,monospace);font-size:11px;">
-                <div style="margin-bottom:6px;opacity:0.8;">Export/import DevTools data (network, timeline, settings).</div>
-                <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-                  <button class="bdt-wf-exp" style="padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:#111;cursor:pointer;">Export JSON</button>
-                  <input type="file" class="bdt-wf-file" accept=".json" style="flex:1;min-width:0;" />
-                </div>
-                <div class="bdt-wf-log" style="max-height:260px;overflow:auto;border-top:1px solid rgba(255,255,255,0.1);padding-top:4px;"></div>
-              </div>
-            `;
-            this.logBox = view.querySelector(".bdt-wf-log");
-            const expBtn = view.querySelector(".bdt-wf-exp");
-            const fileIn = view.querySelector(".bdt-wf-file");
+  v.querySelector(".wf-exp").onclick=()=>this.export();
+  v.querySelector(".wf-imp").onchange=e=>this.import(e.target.files[0]);
+ },
 
-            expBtn.addEventListener("click",()=>this.handleExport());
-            fileIn.addEventListener("change",()=>this.handleImport(fileIn.files[0]));
-        },
+ export(){
+  if(!this.api.unsafe.ensure("workflows"))return;
 
-        handleExport(){
-            const payload = {
-                time:new Date().toISOString(),
-                url:location.href,
-                settings:{
-                    safe: DevTools.state.safe,
-                    ui: DevTools.state.ui
-                },
-                plugins:Object.keys(DevTools.plugins.registry).map(id=>{
-                    const rec = DevTools.plugins.registry[id];
-                    return {id,status:rec.status,disabled:!!rec.disabled,src:rec.src};
-                })
-            };
-            this.exportJSON(payload,"bjorn-devtools-export.json");
-            this.log("Exported current configuration.");
-        },
+  const dump={
+   plugins:Object.keys(DT.plugins.registry),
+   state:DT.state,
+   timestamp:Date.now()
+  };
 
-        handleImport(file){
-            if (!file) return;
-            const reader=new FileReader();
-            reader.onload=()=>{
-                try{
-                    const json = JSON.parse(String(reader.result));
-                    this.log("Imported JSON with keys: "+Object.keys(json).join(", "));
-                }catch(e){
-                    this.log("Import error: "+e.message);
-                }
-            };
-            reader.readAsText(file);
-        },
+  const data=JSON.stringify(dump,null,2);
+  const a=document.createElement("a");
+  a.href="data:application/json,"+encodeURIComponent(data);
+  a.download="devtools-export.json";
+  a.click();
 
-        log(msg){
-            if (!this.logBox) return;
-            const div=document.createElement("div");
-            div.style.cssText="padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.06);";
-            div.textContent = msg;
-            this.logBox.appendChild(div);
-            this.logBox.scrollTop = this.logBox.scrollHeight;
-        },
+  this.out.textContent="Exported devtools-export.json";
+ },
 
-        onUnload(){
-            this.view=null;
-            this.logBox=null;
-        }
-    });
+ import(file){
+  if(!this.api.unsafe.ensure("workflows"))return;
+
+  const r=new FileReader();
+  r.onload=()=>{
+   try{
+    const obj=JSON.parse(r.result);
+    this.out.textContent="Imported:\n"+JSON.stringify(obj,null,2);
+   }catch(e){
+    this.out.textContent="ERR: "+e.message;
+   }
+  };
+  r.readAsText(file);
+ }
+});
 })();
