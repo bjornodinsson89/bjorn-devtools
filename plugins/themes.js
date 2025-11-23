@@ -1,4 +1,4 @@
-// plugins/themes.js
+// plugins/themes.js — patched for stability and UX
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -9,8 +9,11 @@
 
         onLoad(api) {
             this.api = api;
-            this.root = api.ui.getRoot();
+            this.root = api.ui.getRoot(); // shadow root host
 
+            /*===========================================================
+            =  THEME DEFINITIONS
+            ===========================================================*/
             this.THEMES = {
                 odin: {
                     "--bdt-bg": "#18130f",
@@ -48,59 +51,89 @@
             =  APPLY THEME
             ===========================================================*/
             this.applyTheme = (name) => {
+                if (!name) {
+                    this.api.log("Usage: theme <name>");
+                    return;
+                }
+
                 const vars = this.THEMES[name];
-                if (!vars) return api.log("Unknown theme: " + name);
+                if (!vars) {
+                    this.api.log("Unknown theme: " + name);
+                    this.api.log("Available: " + Object.keys(this.THEMES).join(", "));
+                    return;
+                }
 
-                Object.entries(vars).forEach(([k, v]) =>
-                    this.root.style.setProperty(k, v)
-                );
+                // Apply each CSS variable
+                Object.entries(vars).forEach(([k, v]) => {
+                    this.root.style.setProperty(k, v);
+                });
 
-                api.log("Theme applied: " + name);
+                this.api.log("Theme applied: " + name);
             };
 
             /*===========================================================
-            =  RESET
+            =  RESET TO BASE
             ===========================================================*/
             this.reset = () => {
-                Object.keys(this.THEMES.odin).forEach(k =>
+                const sample = this.THEMES.odin; // use any known theme to enumerate keys
+                Object.keys(sample).forEach(k =>
                     this.root.style.setProperty(k, "")
                 );
-                api.log("Theme reset to base.");
+                this.api.log("Theme reset to base.");
             };
 
             /*===========================================================
             =  EXPORT CURRENT THEME
             ===========================================================*/
             this.exportTheme = () => {
-                const style = getComputedStyle(this.root);
                 const output = {};
-                Object.keys(this.THEMES.odin).forEach(k => {
-                    output[k] = style.getPropertyValue(k);
+                const style = getComputedStyle(this.root);
+
+                // Collect all known variables
+                const keys = new Set();
+                Object.values(this.THEMES).forEach(theme => {
+                    Object.keys(theme).forEach(k => keys.add(k));
                 });
-                api.log(JSON.stringify(output, null, 2));
+
+                keys.forEach(k => {
+                    const v = style.getPropertyValue(k).trim();
+                    if (v) output[k] = v;
+                });
+
+                this.api.log(JSON.stringify(output, null, 2));
             };
 
             /*===========================================================
             =  COMMANDS
             ===========================================================*/
+
+            // Change theme
             api.commands.register("theme", (name) => {
-                if (!name) return api.log("Themes: " + Object.keys(this.THEMES).join(", "));
+                if (!name) {
+                    this.api.log("Themes: " + Object.keys(this.THEMES).join(", "));
+                    return;
+                }
+
                 name = name.trim();
                 if (name === "reset") return this.reset();
                 this.applyTheme(name);
             }, "Set theme");
 
+            // Set individual CSS vars
             api.commands.register("theme.set", (pair) => {
                 const [k, ...rest] = (pair || "").split("=");
                 const v = rest.join("=");
-                if (!k || !v) return api.log("Usage: theme.set --var=value");
+
+                if (!k || !v) return this.api.log("Usage: theme.set --var=value");
+
                 this.root.style.setProperty(k.trim(), v.trim());
-                api.log(`Set ${k} = ${v}`);
+                this.api.log(`Set ${k} = ${v}`);
             }, "Set CSS variable");
 
+            // Export current theme
             api.commands.register("theme.export", () => this.exportTheme(), "Export current theme");
 
-            api.log("[themes] ready");
+            this.api.log("[themes] ready");
         },
 
         onMount() {}
