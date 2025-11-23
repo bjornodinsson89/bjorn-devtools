@@ -1,4 +1,4 @@
-// plugins/builder.js
+// plugins/builder.js — patched & improved
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -9,7 +9,11 @@
 
         onLoad(api) {
             this.api = api;
+            this.boundErrorListener = null;
 
+            /*===========================================
+            =  COMMANDS
+            ============================================*/
             api.commands.register("builder.save", name => {
                 if (!name) return api.log("Usage: builder.save <name>");
                 this.saveSnippet(name);
@@ -21,7 +25,8 @@
             }, "Load builder snippet");
 
             api.commands.register("builder.list", () => {
-                const keys = Object.keys(localStorage).filter(k => k.startsWith("__bdt_builder_"));
+                const keys = Object.keys(localStorage)
+                    .filter(k => k.startsWith("__bdt_builder_"));
                 api.log("Snippets:");
                 keys.forEach(k => api.log("- " + k.replace("__bdt_builder_", "")));
             }, "List builder snippets");
@@ -38,7 +43,9 @@
                 if (!this.api.ensureUnsafe("builder.import")) return;
                 try {
                     const obj = JSON.parse(json);
-                    if (!obj.name) return api.log("Import requires {name, html, css, js}");
+                    if (!obj.name || !obj.html || obj.css === undefined || obj.js === undefined)
+                        return api.log("Import requires {name, html, css, js}");
+
                     this.setSnippet(obj.name, obj);
                     api.log("Imported snippet: " + obj.name);
                 } catch (e) {
@@ -49,9 +56,9 @@
             api.log("[builder] ready");
         },
 
-        /*===========================================================
-        =  SNIPPET STORAGE
-        ===========================================================*/
+        /*===========================================
+        =  STORAGE HELPERS
+        ============================================*/
         keyName(name) { return "__bdt_builder_" + name; },
 
         saveSnippet(name) {
@@ -80,7 +87,9 @@
             try {
                 const raw = localStorage.getItem(this.keyName(name));
                 return raw ? JSON.parse(raw) : null;
-            } catch (e) { return null; }
+            } catch (e) {
+                return null;
+            }
         },
 
         setSnippet(name, obj) {
@@ -91,10 +100,11 @@
             }
         },
 
-        /*===========================================================
-        =  MOUNT UI
-        ===========================================================*/
+        /*===========================================
+        =  SANDBOX SETUP
+        ============================================*/
         onMount(view, api) {
+            // NEW: secure iframe with sandbox
             view.innerHTML = `
                 <div style="display:flex;gap:6px;margin-bottom:6px;">
                     <button class="bdt-b-run">Run</button>
@@ -112,10 +122,9 @@
                         style="flex:1;background:#000;color:#fff;font-family:ui-monospace,monospace;font-size:11px;padding:6px;border:1px solid #444;"></textarea>
                 </div>
 
-                <iframe class="bdt-b-frame" style="
-                    width:100%;height:55%;margin-top:6px;
-                    background:#fff;border:1px solid #333;border-radius:4px;
-                "></iframe>
+                <iframe class="bdt-b-frame" sandbox="allow-scripts"
+                    style="width:100%;height:55%;margin-top:6px;
+                    background:#fff;border:1px solid #333;border-radius:4px;"></iframe>
             `;
 
             this.html = view.querySelector(".bdt-b-html");
@@ -136,22 +145,30 @@
             this.js.addEventListener("input", autoHandler);
         },
 
-        /*===========================================================
-        =  SANDBOX RUN
-        ===========================================================*/
+        /*===========================================
+        =  SANDBOX RUNNER
+        ============================================*/
         runSandbox() {
-            if (this.api.state.safe()) {
-                this.api.log("SAFE MODE: JS execution blocked.");
-                this.loadHTMLCSSOnly();
-                return;
+            const safe = this.api.state.safe();
+
+            // Clean old listeners
+            if (this.boundErrorListener) {
+                window.removeEventListener("message", this.boundErrorListener);
+                this.boundErrorListener = null;
             }
 
             const doc = this.frame.contentDocument;
+
             const html = this.html.value;
             const css = this.css.value;
-            const js = this.js.value;
+            const js = this.js.value.replace(/<\/script/gi, "<\\/script"); // prevent break-out
 
-            const fullHTML = `
+            if (safe) {
+                this.api.log("SAFE MODE: JS execution blocked.");
+                return this.loadHTMLCSSOnly();
+            }
+
+            const full = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -159,7 +176,6 @@
 </head>
 <body>
 ${html}
-
 <script>
 try {
 ${js}
@@ -167,16 +183,15 @@ ${js}
     parent.postMessage({bdtSandboxError: e.message}, "*");
 }
 </script>
-
 </body>
 </html>
             `;
 
             doc.open();
-            doc.write(fullHTML);
+            doc.write(full);
             doc.close();
 
-            /* Capture sandbox errors */
+            // error listener
             this.boundErrorListener = (e) => {
                 if (e.data && e.data.bdtSandboxError) {
                     this.api.log("Sandbox ERR: " + e.data.bdtSandboxError);
@@ -187,21 +202,17 @@ ${js}
 
         loadHTMLCSSOnly() {
             const doc = this.frame.contentDocument;
-            const html = this.html.value;
-            const css = this.css.value;
 
-            const fullHTML = `
+            const full = `
 <!DOCTYPE html>
 <html>
-<head>
-<style>${css}</style>
-</head>
-<body>${html}</body>
+<head><style>${this.css.value}</style></head>
+<body>${this.html.value}</body>
 </html>
             `;
 
             doc.open();
-            doc.write(fullHTML);
+            doc.write(full);
             doc.close();
         }
     });
