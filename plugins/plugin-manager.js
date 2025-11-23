@@ -1,4 +1,4 @@
-// plugins/plugin-manager.js
+// plugins/plugin-manager.js — patched & stabilized
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -10,52 +10,141 @@
         onLoad(api) {
             this.api = api;
             this.registry = DevTools.plugins.registry;
-            this._logCache = {}; // per-plugin logs
+            this._logCache = {};
 
+            /*===========================================================
+            =  COMMAND: plugin.log <id>
+            ===========================================================*/
             api.commands.register("plugin.log", (id) => {
                 if (!id) return api.log("Usage: plugin.log <id>");
-                if (!this._logCache[id]) return api.log("No logs for plugin.");
+
+                const logs = this._logCache[id];
+                if (!logs) return api.log("No logs for plugin.");
+
                 api.log("--- Logs for " + id + " ---");
-                this._logCache[id].forEach(line => api.log(line));
+                logs.forEach(line => api.log(line));
             }, "Show plugin log history.");
 
+            /*===========================================================
+            =  COMMAND: plugin.disable <id>
+            ===========================================================*/
             api.commands.register("plugin.disable", (id) => {
                 if (!id) return api.log("Usage: plugin.disable <id>");
+
                 const rec = this.registry[id];
-                if (!rec) return api.log("Unknown plugin.");
+                if (!rec) return api.log("Unknown plugin: " + id);
+
+                if (id === "pluginManager")
+                    return api.log("Cannot disable Plugin Manager.");
+
                 rec.disabled = true;
+
                 api.log("Disabled: " + id);
+                this.refreshTabs();
+                this.render && this.render();
             }, "Disable a plugin.");
 
+            /*===========================================================
+            =  COMMAND: plugin.enable <id>
+            ===========================================================*/
             api.commands.register("plugin.enable", (id) => {
                 if (!id) return api.log("Usage: plugin.enable <id>");
+
                 const rec = this.registry[id];
-                if (!rec) return api.log("Unknown plugin.");
+                if (!rec) return api.log("Unknown plugin: " + id);
+
                 rec.disabled = false;
+
                 api.log("Enabled: " + id);
+                this.refreshTabs();
+                this.render && this.render();
             }, "Enable a plugin.");
+
+            /*===========================================================
+            =  COMMAND: plugin.reload <id>
+            ===========================================================*/
+            api.commands.register("plugin.reload", (id) => {
+                if (!id) return api.log("Usage: plugin.reload <id>");
+                this.reloadPlugin(id);
+            }, "Reload a plugin");
 
             api.log("[pluginManager] ready");
         },
 
+        /*===========================================================
+        =  LOG BUFFERING
+        ===========================================================*/
         logFor(id, msg) {
             if (!this._logCache[id]) this._logCache[id] = [];
             this._logCache[id].push(msg);
         },
 
-        reloadPlugin(id) {
+        /*===========================================================
+        =  PLUGIN RELOAD LOGIC (safe, full cleanup)
+        ===========================================================*/
+        async reloadPlugin(id) {
             const api = this.api;
             const rec = this.registry[id];
+
             if (!rec) return api.log("Unknown plugin: " + id);
+            if (!rec.src) return api.log("Plugin has no src URL.");
 
             api.log(`Reloading plugin '${id}'...`);
+
+            // Clear previous plugin instance
             rec.plugin = null;
             rec.status = "pending";
 
-            DevTools.plugins.load({ id, src: rec.src, name: rec.id })
-                .then(() => api.log("Reload complete: " + id));
+            // Attempt reload
+            await DevTools.plugins.load({
+                id,
+                src: rec.src,
+                name: rec.id
+            });
+
+            if (rec.status === "loaded") {
+                api.log(`Reload complete: ${id}`);
+            } else {
+                api.log(`Reload failed: ${id} (status=${rec.status})`);
+            }
+
+            this.refreshTabs();
+            this.render && this.render();
         },
 
+        /*===========================================================
+        =  TAB REFRESH
+        ===========================================================*/
+        refreshTabs() {
+            const root = this.api.ui.getRoot();
+            if (!root) return;
+
+            const tabBar = root.querySelector(".bdt-tabs");
+            if (!tabBar) return;
+
+            // remove existing plugin tabs
+            tabBar.querySelectorAll(".bdt-tab").forEach(btn => {
+                const id = btn.dataset.tab;
+                if (id !== "CONSOLE" && !this.registry[id]) {
+                    btn.remove();
+                }
+            });
+
+            // rebuild missing plugin tabs
+            Object.values(this.registry).forEach(rec => {
+                if (!rec.plugin) return;
+                if (rec.disabled) return;
+                if (!rec.plugin.tab) return;
+
+                if (!tabBar.querySelector(`[data-tab="${rec.id}"]`)) {
+                    this.api.ui.addTab(rec.id, rec.plugin.name || rec.id);
+                }
+            });
+        },
+
+        /*===========================================================
+        =  UI MOUNT
+        ===========================================================*/
         onMount(view, api) {
             const reg = this.registry;
 
@@ -66,10 +155,20 @@
 
             const list = view.querySelector(".bdt-pm-list");
 
+            const getStatusColor = (status) => {
+                return status === "loaded" ? "#3dff88" :
+                    status === "error" ? "#ff4444" :
+                        status === "loading" ? "#ffd27a" :
+                            "#bbb";
+            };
+
             const render = () => {
                 list.innerHTML = "";
 
                 Object.values(reg).forEach(rec => {
+                    // Guard broken entries
+                    if (!rec || !rec.id) return;
+
                     const row = document.createElement("div");
                     row.style.cssText = `
                         padding:6px 0;
@@ -80,16 +179,12 @@
                         align-items:center;
                     `;
 
-                    const name = document.createElement("div");
-                    name.style.cssText = "flex:1;";
+                    const nameBox = document.createElement("div");
+                    nameBox.style.cssText = "flex:1;";
 
-                    const statusColor =
-                        rec.status === "loaded" ? "#3dff88" :
-                        rec.status === "error" ? "#ff4444" :
-                        rec.status === "loading" ? "#ffd27a" :
-                        "#bbb";
+                    const statusColor = getStatusColor(rec.status);
 
-                    name.innerHTML = `
+                    nameBox.innerHTML = `
                         <span style="color:${statusColor};">●</span>
                         <strong>${rec.id}</strong>
                         <span style="opacity:0.6;">[${rec.status}]</span>
@@ -99,6 +194,9 @@
                     const controls = document.createElement("div");
                     controls.style.cssText = "display:flex;gap:6px;";
 
+                    /*------------------------------
+                    | Reload Button
+                    ------------------------------*/
                     const btnReload = document.createElement("button");
                     btnReload.textContent = "Reload";
                     btnReload.style.cssText = `
@@ -108,6 +206,9 @@
                     `;
                     btnReload.onclick = () => this.reloadPlugin(rec.id);
 
+                    /*------------------------------
+                    | Info Button
+                    ------------------------------*/
                     const btnInfo = document.createElement("button");
                     btnInfo.textContent = "Info";
                     btnInfo.style.cssText = `
@@ -125,6 +226,9 @@
                         }, null, 2));
                     };
 
+                    /*------------------------------
+                    | Disable/Enable Button
+                    ------------------------------*/
                     const btnToggle = document.createElement("button");
                     btnToggle.textContent = rec.disabled ? "Enable" : "Disable";
                     btnToggle.style.cssText = `
@@ -133,12 +237,16 @@
                         cursor:pointer;border-radius:4px;
                     `;
                     btnToggle.onclick = () => {
+                        if (rec.id === "pluginManager") {
+                            return api.log("Cannot disable Plugin Manager.");
+                        }
                         rec.disabled = !rec.disabled;
+                        this.refreshTabs();
                         render();
                     };
 
                     controls.append(btnReload, btnInfo, btnToggle);
-                    row.append(name, controls);
+                    row.append(nameBox, controls);
                     list.appendChild(row);
                 });
             };
