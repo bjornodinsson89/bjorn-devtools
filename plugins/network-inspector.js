@@ -1,8 +1,8 @@
+// plugins/network-inspector.js
 (function () {
-    const DevTools = window.BjornDevTools;
+    const DevTools = window.BjornDevTools || arguments[0];
     if (!DevTools) return;
     
-    // Determine the target window for hooking
     const targetWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
     DevTools.registerPlugin("networkInspector", {
@@ -18,8 +18,8 @@
             view.innerHTML = `
                 <div style="display:flex; flex-direction:column; height:100%;">
                     <div style="display:flex; justify-content:space-between; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1);">
-                        <button id="bdt-net-toggle" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px;">⏺ Record</button>
-                        <button id="bdt-net-clear" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px;">🚫 Clear</button>
+                        <button id="bdt-net-toggle" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px; cursor:pointer;">⏺ Record</button>
+                        <button id="bdt-net-clear" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px; cursor:pointer;">🚫 Clear</button>
                     </div>
                     <div class="bdt-net-list" style="flex:1; overflow-y:auto;"></div>
                 </div>
@@ -62,14 +62,14 @@
             
             btnClear.onclick = () => { this._entries = []; this._render(); };
 
-            // Hooking Logic (Safe)
+            // Hooking Logic
             if (!targetWindow.__bdtNetHook) {
                 targetWindow.__bdtNetHook = true;
                 const origFetch = targetWindow.fetch;
                 targetWindow.fetch = async function (...args) {
+                    // If not capturing, pass through immediately
                     if(!self._isCapturing) return origFetch.apply(this, args);
                     
-                    const start = performance.now();
                     let url = (typeof args[0] === 'object') ? args[0].url : args[0];
                     let method = (args[1] && args[1].method) ? args[1].method : "GET";
                     
@@ -80,7 +80,8 @@
                             let name = url.includes("?") ? url.split("?")[0] : url;
                             name = name.split("/").pop() || name;
                             self._entries.push({ method, url, name, status: res.status, body: txt.substring(0,200) });
-                            if(api.state.currentTab() === "networkInspector") self._render();
+                            // Only re-render if we are actually looking at the tab
+                            if(api.state.currentTab && api.state.currentTab() === "networkInspector") self._render();
                         });
                         return res;
                     } catch(e) { throw e; }
