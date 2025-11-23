@@ -1,6 +1,5 @@
-// plugins/debugger.js
 (function() {
-    const DevTools = window.BjornDevTools || arguments[0];
+    const DevTools = (typeof __CORE__ !== "undefined" ? __CORE__ : window.BjornDevTools);
     if (!DevTools) return;
 
     DevTools.registerPlugin("debugger", {
@@ -13,29 +12,79 @@
             });
             view.appendChild(header);
 
-            // 1. CONSOLE SPY
+            // --- 1. CONSOLE SPY ---
             let spyActive = false;
+            // We do NOT capture originalLog here globally to avoid touching it early.
+            // We capture it only when needed or use window.console directly.
+            let originalLog = null;
+            let originalErr = null;
+
             view.appendChild(api.dom.create("button", {
                 text: "🔌 Connect Console Spy",
                 style: { width: "100%", padding: "12px", marginBottom: "8px", background: "rgba(255,255,255,0.05)", color: "#ccc", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", cursor: "pointer" },
                 on: { click: (e) => {
                     if (spyActive) {
-                        // Turning off is fine
+                        // Deactivate / Restore
                         spyActive = false;
-                        e.target.textContent = "🔌 Connect Console Spy"; e.target.style.color = "#ccc";
-                        location.reload(); // Usually safest to reload to unhook
+                        if(originalLog) console.log = originalLog;
+                        if(originalErr) console.error = originalErr;
+                        
+                        e.target.textContent = "🔌 Connect Console Spy"; 
+                        e.target.style.color = "#ccc"; e.target.style.borderColor = "rgba(255,255,255,0.1)";
+                        api.log("Console restored.");
                     } else {
-                        api.ui.confirmDangerous(
-                            "Console Injection",
-                            "This wraps the native browser Console object.<br><br><b>Risk:</b> Some games check if the console has been tampered with. This is detectable by sophisticated anti-cheat.",
-                            "MEDIUM",
-                            () => {
-                                spyActive = true;
-                                e.target.textContent = "✅ Spy Active (Reload to clear)"; e.target.style.color = "#3dff88";
-                                const origLog = console.log;
-                                console.log = (...a) => { api.log("📝 " + a.join(" ")); origLog.apply(console, a); };
-                            }
-                        );
+                        // Activate
+                        api.ui.confirmDangerous("Hook Console?", "This wraps console.log. Games may detect this modification.", "MEDIUM", () => {
+                            spyActive = true;
+                            // Capture originals NOW
+                            originalLog = console.log;
+                            originalErr = console.error;
+                            
+                            e.target.textContent = "✅ Spy Active"; 
+                            e.target.style.color = "#3dff88"; e.target.style.borderColor = "#3dff88";
+                            
+                            console.log = (...a) => { api.log("📝 " + a.join(" ")); originalLog.apply(console, a); };
+                            console.error = (...a) => { api.log("❌ " + a.join(" ")); originalErr.apply(console, a); };
+                        });
+                    }
+                }}
+            }));
+
+            // --- 2. CSP SPY ---
+            let netActive = false;
+            let originalFetchSpy = null;
+
+            view.appendChild(api.dom.create("button", {
+                text: "📡 CSP/Block Spy",
+                style: { width: "100%", padding: "12px", marginBottom: "8px", background: "rgba(255,255,255,0.05)", color: "#ccc", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", cursor: "pointer" },
+                on: { click: (e) => {
+                    if (netActive) {
+                        // We cannot easily "unhook" this one cleanly without a reload usually, 
+                        // but we can stop the logging logic.
+                         api.log("CSP Spy cannot be fully unloaded without reload.");
+                         netActive = false;
+                         e.target.textContent = "⚠️ Inactive (Reload to clear)";
+                         e.target.style.color = "#ffcc00";
+                    } else {
+                        api.ui.confirmDangerous("Hook Fetch for CSP?", "Wraps window.fetch to detect blocked requests.", "MEDIUM", () => {
+                            netActive = true;
+                            e.target.textContent = "✅ CSP Spy Active"; e.target.style.color = "#3dff88";
+                            
+                            originalFetchSpy = window.fetch;
+                            window.fetch = async (...args) => {
+                                try { 
+                                    // If we turned it off, just pass through
+                                    if(!netActive) return originalFetchSpy(...args);
+
+                                    const res = await originalFetchSpy(...args); 
+                                    return res; 
+                                }
+                                catch (err) { 
+                                    if(netActive) api.log(`[Blocked] ❌ ${args[0]} - ${err.message}`); 
+                                    throw err; 
+                                }
+                            };
+                        });
                     }
                 }}
             }));
