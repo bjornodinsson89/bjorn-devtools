@@ -1,20 +1,15 @@
+// plugins/themes.js
 (function () {
-    const DevTools = window.BjornDevTools;
+    const DevTools = window.BjornDevTools || arguments[0];
     if (!DevTools) return;
 
     DevTools.registerPlugin("themes", {
         tab: null, 
         onLoad(api) {
             const THEMES = {
-                odin: { 
-                    vars: { '--bdt-bg': '#121218', '--bdt-accent': '#ffb080', '--bdt-text': '#f5f5f5' }
-                },
-                matrix: { 
-                    vars: { '--bdt-bg': '#000', '--bdt-accent': '#00ff41', '--bdt-text': '#00ff41', '--bdt-border': '#003300' }
-                },
-                ocean: { 
-                    vars: { '--bdt-bg': '#0f172a', '--bdt-accent': '#38bdf8', '--bdt-text': '#e2e8f0', '--bdt-border': '#1e293b' }
-                }
+                odin: { vars: { '--bdt-bg': '#121218', '--bdt-accent': '#ffb080', '--bdt-text': '#f5f5f5', '--bdt-border': 'rgba(255,255,255,0.1)' }},
+                matrix: { vars: { '--bdt-bg': '#000', '--bdt-accent': '#00ff41', '--bdt-text': '#00ff41', '--bdt-border': '#003300' }},
+                ocean: { vars: { '--bdt-bg': '#0f172a', '--bdt-accent': '#38bdf8', '--bdt-text': '#e2e8f0', '--bdt-border': '#1e293b' }}
             };
 
             this.next = () => {
