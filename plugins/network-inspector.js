@@ -1,5 +1,5 @@
 (function () {
-    const DevTools = (typeof __CORE__ !== "undefined" ? __CORE__ : window.BjornDevTools);
+    const DevTools = window.BjornDevTools || arguments[0];
     if (!DevTools) return;
     
     const targetWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
@@ -7,9 +7,7 @@
     DevTools.registerPlugin("networkInspector", {
         tab: "networkInspector",
         _entries: [],
-        _maxEntries: 50,
         _isCapturing: false, 
-        _isHooked: false, // New flag to ensure we don't hook until asked
 
         onMount(view, api) {
             const self = this;
@@ -34,14 +32,30 @@
                 btnToggle.style.color = self._isCapturing ? "#ff5555" : "#ccc";
             };
 
-            // 1. RENDER LOGIC
+            btnToggle.onclick = () => {
+                if (self._isCapturing) {
+                    self._isCapturing = false;
+                    updateBtn();
+                } else {
+                    api.ui.confirmDangerous(
+                        "Network Recording Risk", 
+                        "Recording network traffic will capture your <b>Session IDs</b> and <b>API Keys</b>.<br><br>Do not share logs.",
+                        "HIGH",
+                        () => {
+                            self._isCapturing = true;
+                            updateBtn();
+                            api.log("📡 Network Recording Started");
+                        }
+                    );
+                }
+            };
+
+            btnClear.onclick = () => { this._entries = []; this._render(); };
+
             this._render = () => {
                 listCont.innerHTML = "";
                 if (!this._isCapturing && this._entries.length === 0) {
-                    listCont.innerHTML = `<div style="padding:20px; text-align:center; color:#666;">
-                        Network Inspector is <b>OFF</b>.<br>
-                        <span style="font-size:10px; opacity:0.7">No hooks are active.</span>
-                    </div>`;
+                    listCont.innerHTML = `<div style="padding:20px; text-align:center; color:#666;">Paused</div>`;
                     return;
                 }
                 this._entries.slice().reverse().forEach(e => {
@@ -61,42 +75,12 @@
                     listCont.appendChild(row);
                 });
             };
-
-            // 2. ACTIVATION LOGIC
-            btnToggle.onclick = () => {
-                // If Safe Mode is ON, this function inside 'confirmDangerous' will block execution
-                if (self._isCapturing) {
-                    self._isCapturing = false;
-                    updateBtn();
-                    self._render();
-                } else {
-                    api.ui.confirmDangerous(
-                        "Inject Network Hook?", 
-                        "This will modify <b>window.fetch</b> to capture traffic.<br>This hook will remain active (but silent) until you reload the page.",
-                        "HIGH",
-                        () => {
-                            // ONLY HERE do we apply the hook
-                            self.enableHook(api); 
-                            self._isCapturing = true;
-                            updateBtn();
-                            api.log("📡 Network Recording Started");
-                            self._render();
-                        }
-                    );
-                }
-            };
             
-            btnClear.onclick = () => { this._entries = []; this._render(); };
-
-            // 3. LAZY HOOKING FUNCTION
-            this.enableHook = (api) => {
-                if (self._isHooked) return; // Already hooked, don't double wrap
-                self._isHooked = true;
-
+            // Hooking Logic
+            if (!targetWindow.__bdtNetHook) {
+                targetWindow.__bdtNetHook = true;
                 const origFetch = targetWindow.fetch;
-                
                 targetWindow.fetch = async function (...args) {
-                    // If capturing is toggled OFF, pass through immediately (Low footprint)
                     if(!self._isCapturing) return origFetch.apply(this, args);
                     
                     let url = (typeof args[0] === 'object') ? args[0].url : args[0];
@@ -105,27 +89,17 @@
                     try { 
                         const res = await origFetch.apply(this, args); 
                         const clone = res.clone();
-                        
-                        // Safety Check: Don't crash on huge files
-                        const cType = clone.headers.get("content-type") || "";
-                        if(cType.includes("text") || cType.includes("json") || cType.includes("xml")) {
-                            clone.text().then(txt => {
-                                let name = url.includes("?") ? url.split("?")[0] : url;
-                                name = name.split("/").pop() || name;
-                                if(self._entries.length > self._maxEntries) self._entries.shift();
-                                self._entries.push({ method, url, name, status: res.status, body: txt.substring(0,300) + (txt.length>300?"...":"") });
-                                // Update UI if visible
-                                if(api.state.currentTab && api.state.currentTab() === "networkInspector") self._render();
-                            });
-                        }
+                        // Optimization: Wait for text, but handle errors
+                        clone.text().then(txt => {
+                            let name = url.includes("?") ? url.split("?")[0] : url;
+                            name = name.split("/").pop() || name;
+                            self._entries.push({ method, url, name, status: res.status, body: txt.substring(0,200) });
+                            if(api.state.currentTab && api.state.currentTab() === "networkInspector") self._render();
+                        }).catch(() => {});
                         return res;
                     } catch(e) { throw e; }
                 };
-            };
-            
-            // Initial render
-            updateBtn();
-            this._render();
+            }
         }
     });
 })();
