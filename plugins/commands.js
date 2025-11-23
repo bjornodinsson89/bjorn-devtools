@@ -1,4 +1,4 @@
-// plugins/commands.js
+// plugins/commands.js — patched & improved
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -11,13 +11,19 @@
             const log = api.log;
             const reg = api.commands.register;
 
+            const isInsideDevtools = (el) => {
+                // Prevent commands from interacting with devtools shadow DOM UI.
+                const path = el?.getRootNode?.() || null;
+                return path && path.host && path.host.id === "bjorn-devtools-host";
+            };
+
             /*===========================================================
             =  HELP
             ===========================================================*/
             reg("help", () => {
                 log("Available Commands:");
-                Object.entries(DevTools.commands).forEach(([k,v])=>{
-                    log(`  ${k}  — ${v.desc||""}`);
+                Object.entries(DevTools.commands).forEach(([k, v]) => {
+                    log(`  ${k} — ${v.desc || ""}`);
                 });
             }, "List commands.");
 
@@ -39,7 +45,8 @@
             ===========================================================*/
             reg("scroll.to", (arg) => {
                 const y = Number(arg || 0);
-                window.scrollTo({ top:y, behavior:"smooth" });
+                if (Number.isNaN(y)) return log("Invalid number");
+                window.scrollTo({ top: y, behavior: "smooth" });
                 log("Scrolling to: " + y);
             }, "Scroll to Y position");
 
@@ -50,8 +57,12 @@
             ===========================================================*/
             reg("copy", async (txt) => {
                 if (!txt) return log("Usage: copy <text>");
-                await navigator.clipboard.writeText(txt);
-                log("Copied to clipboard.");
+                try {
+                    await navigator.clipboard.writeText(txt);
+                    log("Copied to clipboard.");
+                } catch (e) {
+                    log("ERR: Clipboard blocked by browser.");
+                }
             }, "Copy text");
 
             /*===========================================================
@@ -59,15 +70,33 @@
             ===========================================================*/
             reg("inspect", (selector) => {
                 if (!selector) return log("Usage: inspect <selector>");
-                const el = document.querySelector(selector);
+
+                let el = null;
+                try {
+                    el = document.querySelector(selector);
+                } catch (err) {
+                    return log("Invalid selector.");
+                }
+
                 if (!el) return log("Not found.");
-                log(el.outerHTML);
+                if (isInsideDevtools(el)) return log("Cannot inspect DevTools UI.");
+
+                const html = el.outerHTML;
+                const max = 2000;
+
+                log(html.length > max ? html.slice(0, max) + "… (truncated)" : html);
             }, "Show element outerHTML");
 
             reg("highlight", (selector) => {
                 if (!selector) return log("Usage: highlight <selector>");
-                const el = document.querySelector(selector);
+
+                let el = null;
+                try { el = document.querySelector(selector); }
+                catch { return log("Invalid selector."); }
+
                 if (!el) return log("Not found.");
+                if (isInsideDevtools(el)) return log("Cannot highlight DevTools UI.");
+
                 const r = el.getBoundingClientRect();
                 const box = document.createElement("div");
                 box.style.cssText = `
@@ -78,7 +107,8 @@
                     z-index:2147483646;pointer-events:none;
                 `;
                 document.body.appendChild(box);
-                setTimeout(()=>box.remove(),1500);
+                setTimeout(() => box.remove(), 1500);
+
                 log("Highlighted.");
             }, "Highlight an element");
 
@@ -87,11 +117,14 @@
             ===========================================================*/
             reg("fetch", async (url) => {
                 if (!url) return log("Usage: fetch <url>");
+
                 if (!api.ensureUnsafe("fetch")) return;
+
                 try {
                     const res = await window.fetch(url);
                     const txt = await res.text();
-                    log(txt.slice(0, 2000));
+                    const out = txt.length > 2000 ? txt.slice(0, 2000) + "… (truncated)" : txt;
+                    log(out);
                 } catch (e) {
                     log("ERR: " + e.message);
                 }
@@ -102,6 +135,7 @@
             ===========================================================*/
             reg("eval", (code) => {
                 if (!api.ensureUnsafe("eval")) return;
+
                 try {
                     const r = eval(code);
                     log(String(r));
@@ -114,6 +148,7 @@
             =  UTILITIES
             ===========================================================*/
             reg("echo", (txt) => log(txt), "Print text");
+
             reg("time", () => log(new Date().toLocaleString()), "Current time");
 
             log("[commands] ready");
