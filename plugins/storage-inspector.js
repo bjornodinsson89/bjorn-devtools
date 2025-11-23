@@ -4,27 +4,26 @@
     if (!DevTools || !DevTools.definePlugin) return;
 
     DevTools.definePlugin("storageInspector", {
-        // We define the tab ID here, but we create it dynamically below
         tab: "STORAGE",
-
-        // State
         _mode: "local",
         _filter: "",
         _selectedKey: null,
         
         onLoad(api) {
-            // --- DYNAMICALLY ADD TAB ---
-            // This ensures the Core has a tab ready for us
+            // PATCH: Create Tab
             api.ui.addTab("STORAGE", "Storage");
 
-            // --- LIVE HOOKS ---
             const hookStorage = (type) => {
                 const proto = window[type + "Storage"];
                 if(!proto) return;
                 const origSet = proto.setItem, origRemove = proto.removeItem, origClear = proto.clear;
-                proto.setItem = function(k, v) { const r = origSet.apply(this, arguments); api.ui.getView("STORAGE").dispatchEvent(new CustomEvent("bdt-storage-update")); return r; };
-                proto.removeItem = function(k) { const r = origRemove.apply(this, arguments); api.ui.getView("STORAGE").dispatchEvent(new CustomEvent("bdt-storage-update")); return r; };
-                proto.clear = function() { const r = origClear.apply(this, arguments); api.ui.getView("STORAGE").dispatchEvent(new CustomEvent("bdt-storage-update")); return r; };
+                const dispatch = () => {
+                    const view = api.ui.getView("STORAGE");
+                    if(view) view.dispatchEvent(new CustomEvent("bdt-storage-update"));
+                };
+                proto.setItem = function(k, v) { const r = origSet.apply(this, arguments); dispatch(); return r; };
+                proto.removeItem = function(k) { const r = origRemove.apply(this, arguments); dispatch(); return r; };
+                proto.clear = function() { const r = origClear.apply(this, arguments); dispatch(); return r; };
             };
             try { hookStorage("local"); hookStorage("session"); } catch(e) {}
         },
