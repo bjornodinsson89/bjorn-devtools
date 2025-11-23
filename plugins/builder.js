@@ -1,22 +1,11 @@
-// plugins/builder.js
 (function() {
     const DevTools = window.BjornDevTools;
-    if (!DevTools || !DevTools.definePlugin) return;
+    if (!DevTools) return;
 
-    DevTools.definePlugin("builder", {
-        tab: "ADVANCED",
-        
-        onLoad: function(api) {
-             // PATCH: Create Tab (Safe to call multiple times)
-             api.ui.addTab("ADVANCED", "Advanced");
-        },
+    DevTools.registerPlugin("builder", {
+        tab: "builder", 
         
         onMount: function(view, api) {
-            // Separator
-            view.appendChild(api.dom.create("div", { 
-                style: { height: "1px", background: "rgba(255,255,255,0.1)", margin: "15px 0" } 
-            }));
-
             const header = api.dom.create("div", {
                 text: "🏗️ CODE GENERATOR",
                 style: { padding: "10px", fontWeight: "bold", color: "#80b0ff", marginBottom: "5px" }
@@ -36,19 +25,20 @@
                     click: () => {
                         const selector = input.value || "body";
                         const codeBlock = `
-function waitFor('${selector}') {
+// Bjorn Generated Wait Routine
+function waitFor(selector) {
     return new Promise(resolve => {
-        if (document.querySelector('${selector}')) return resolve(document.querySelector('${selector}'));
+        if (document.querySelector(selector)) return resolve(document.querySelector(selector));
         const observer = new MutationObserver(() => {
-            if (document.querySelector('${selector}')) { resolve(document.querySelector('${selector}')); observer.disconnect(); }
+            if (document.querySelector(selector)) { resolve(document.querySelector(selector)); observer.disconnect(); }
         });
         observer.observe(document.body, { childList: true, subtree: true });
     });
 }
-waitFor('${selector}').then((elm) => { console.log("Found target!"); /* Code Here */ });
-`;
+waitFor('${selector}').then((elm) => { console.log("Found target:", elm); });`;
+                        
                         api.ui.switchTab("CONSOLE");
-                        api.log("✅ Code Generated! Copy below:");
+                        api.log("✅ Code Generated:");
                         api.log(codeBlock);
                     }
                 }
