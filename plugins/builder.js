@@ -1,5 +1,6 @@
+// plugins/builder.js
 (function() {
-    const DevTools = window.BjornDevTools;
+    const DevTools = window.BjornDevTools || arguments[0];
     if (!DevTools) return;
 
     DevTools.registerPlugin("builder", {
@@ -20,7 +21,7 @@
 
             const btnGen = api.dom.create("button", {
                 text: "Generate 'WaitFor' Code",
-                style: { width: "100%", padding: "10px", background: "#224466", color: "#fff", border: "none", borderRadius: "4px" },
+                style: { width: "100%", padding: "10px", background: "#224466", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" },
                 on: {
                     click: () => {
                         const selector = input.value || "body";
