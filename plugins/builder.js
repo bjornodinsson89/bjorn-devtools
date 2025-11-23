@@ -1,50 +1,38 @@
 // plugins/builder.js
-(function() {
-    const DevTools = window.BjornDevTools || arguments[0];
+(function(){
+    const DevTools = window.BjornDevTools;
     if (!DevTools) return;
 
     DevTools.registerPlugin("builder", {
-        tab: "builder", 
-        
-        onMount: function(view, api) {
-            const header = api.dom.create("div", {
-                text: "🏗️ CODE GENERATOR",
-                style: { padding: "10px", fontWeight: "bold", color: "#80b0ff", marginBottom: "5px" }
-            });
-            view.appendChild(header);
+        name: "Builder",
+        tab: "builder",
 
-            const input = api.dom.create("input", {
-                style: { width: "100%", padding: "10px", background: "#111", border: "1px solid #333", color: "#fff", borderRadius: "4px", marginBottom: "10px" },
-                attrs: { placeholder: "Enter Selector (e.g., #header > div)" }
-            });
-            view.appendChild(input);
+        onLoad(api) { this.api = api; },
 
-            const btnGen = api.dom.create("button", {
-                text: "Generate 'WaitFor' Code",
-                style: { width: "100%", padding: "10px", background: "#224466", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" },
-                on: {
-                    click: () => {
-                        const selector = input.value || "body";
-                        const codeBlock = `
-// Bjorn Generated Wait Routine
-function waitFor(selector) {
-    return new Promise(resolve => {
-        if (document.querySelector(selector)) return resolve(document.querySelector(selector));
-        const observer = new MutationObserver(() => {
-            if (document.querySelector(selector)) { resolve(document.querySelector(selector)); observer.disconnect(); }
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-    });
-}
-waitFor('${selector}').then((elm) => { console.log("Found target:", elm); });`;
-                        
-                        api.ui.switchTab("CONSOLE");
-                        api.log("✅ Code Generated:");
-                        api.log(codeBlock);
-                    }
+        onMount(view) {
+            view.innerHTML = `
+                <textarea class="bdt-b-code" style="width:100%;height:40%;background:#000;color:#fff;font-family:monospace;padding:6px;"></textarea>
+                <button class="bdt-b-run" style="margin:8px 0;">Run</button>
+                <iframe class="bdt-b-frame" style="width:100%;height:50%;background:white;border:1px solid #333;"></iframe>
+            `;
+
+            const code = view.querySelector(".bdt-b-code");
+            const run = view.querySelector(".bdt-b-run");
+            const frame = view.querySelector(".bdt-b-frame");
+
+            run.onclick = () => {
+                const doc = frame.contentDocument;
+                const html = code.value;
+
+                try {
+                    doc.open();
+                    doc.write(html);
+                    doc.close();
+                    this.api.log("[builder] executed");
+                } catch (e) {
+                    this.api.log("[builder ERR] " + e.message);
                 }
-            });
-            view.appendChild(btnGen);
+            };
         }
     });
 })();
