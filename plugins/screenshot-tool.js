@@ -1,62 +1,41 @@
-// plugins/screenshot-tool.js
+// screenshot-tool.js (HEADLESS)
 (function(){
-    const DevTools=window.BjornDevTools;
-    if(!DevTools)return;
+const DT=window.BjornDevTools;if(!DT||!DT.registerPlugin)return;
 
-    // unsafe: reading pixels (security sensitive)
-    DevTools.unsafe.register("screenshotTool", ["capture"]);
+DT.registerPlugin("screenshotTool",{
+ name:"ScreenshotTool",
+ api:null,
 
-    DevTools.registerPlugin("screenshotTool",{
-        name:"Screenshot",
-        tab:"screenshotTool",
+ onLoad(api){
+  this.api=api;
+  api.unsafe.register("screenshotTool","Capture screenshots");
+ },
 
-        onLoad(api){
-            this.api=api;
+ capture(el=document.body){
+  if(!this.api.unsafe.ensure("screenshotTool"))return;
 
-            api.commands.register("shot",()=>{
-                if(!api.ensureUnsafe("screenshotTool.capture")) return;
-                this.capture();
-            });
+  if(window.html2canvas){
+   html2canvas(el).then(c=>{
+    this.download(c.toDataURL("image/png"),"capture.png");
+   });
+   return;
+  }
 
-            api.log("[screenshotTool] ready");
-        },
+  try{
+   const r=el.getBoundingClientRect();
+   const c=document.createElement("canvas");
+   c.width=r.width;c.height=r.height;
+   const ctx=c.getContext("2d");
+   ctx.drawImage(document.documentElement,-r.left,-r.top);
+   this.download(c.toDataURL("image/png"),"capture.png");
+  }catch(e){
+   this.api.log("[screenshot] "+e.message);
+  }
+ },
 
-        async capture(){
-            try{
-                // Try built-in capture (html2canvas replacement: rasterize via SVG foreignObject)
-                const w=window.innerWidth, h=window.innerHeight;
-
-                const svg = `
-                    <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">
-                        <foreignObject x="0" y="0" width="100%" height="100%">
-                            ${new XMLSerializer().serializeToString(document.documentElement)}
-                        </foreignObject>
-                    </svg>`;
-
-                const url="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
-
-                const img=new Image();
-                img.crossOrigin="anonymous";
-                img.src=url;
-
-                await img.decode();
-
-                const canvas=document.createElement("canvas");
-                canvas.width=w;
-                canvas.height=h;
-                const ctx=canvas.getContext("2d");
-                ctx.drawImage(img,0,0);
-
-                window.open(canvas.toDataURL(),"_blank");
-                this.api.log("Screenshot captured.");
-
-            }catch(e){
-                this.api.log("ERR screenshot: "+e.message);
-            }
-        },
-
-        onMount(view){
-            view.innerHTML=`<div style="font-size:11px;">Use command: <b>shot</b></div>`;
-        }
-    });
+ download(dataURL,fname){
+  const a=document.createElement("a");
+  a.href=dataURL;a.download=fname;a.click();
+ }
+});
 })();
