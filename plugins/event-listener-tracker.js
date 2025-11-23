@@ -1,47 +1,24 @@
-// plugins/event-listener-tracker.js
+// event-listener-tracker.js (HEADLESS)
 (function(){
-    const DevTools=window.BjornDevTools;
-    if(!DevTools)return;
+const DT=window.BjornDevTools;if(!DT||!DT.registerPlugin)return;
 
-    DevTools.registerPlugin("eventListenerTracker",{
-        name:"Event Tracker",
-        tab:"eventListenerTracker",
+DT.registerPlugin("eventListenerTracker",{
+ name:"Event Tracker",
+ api:null,
+ calls:[],
+ origAdd:null,
 
-        onLoad(api){
-            this.api=api;
-            this.logs=[];
-            this.render=null;
+ onLoad(api){
+  this.api=api;
+  api.unsafe.register("eventListenerTracker","Track addEventListener");
 
-            if(!window.__bdt_evt_patch__){
-                window.__bdt_evt_patch__=true;
-                const orig=EventTarget.prototype.addEventListener;
-                const self=this;
+  const self=this;
+  this.origAdd=EventTarget.prototype.addEventListener;
 
-                EventTarget.prototype.addEventListener=function(type,fn,opt){
-                    self.logs.push({ target:this, type, time:new Date() });
-                    self.render && self.render();
-                    return orig.call(this,type,fn,opt);
-                };
-            }
-
-            api.log("[eventListenerTracker] ready");
-        },
-
-        onMount(view){
-            view.innerHTML=`<div class="bdt-et" style="font-size:11px;"></div>`;
-            const box=view.querySelector(".bdt-et");
-
-            this.render=()=>{
-                box.innerHTML="";
-                this.logs.slice(-200).forEach(l=>{
-                    const nm = l.target?.nodeName || "object";
-                    const d=document.createElement("div");
-                    d.textContent=`${l.time.toLocaleTimeString()} :: addEventListener("${l.type}") on <${nm}>`;
-                    box.appendChild(d);
-                });
-            };
-
-            this.render();
-        }
-    });
+  EventTarget.prototype.addEventListener=function(t,h,o){
+   self.calls.push({ts:Date.now(),type:t,target:this});
+   return self.origAdd.call(this,t,h,o);
+  };
+ }
+});
 })();
