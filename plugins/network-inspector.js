@@ -1,154 +1,91 @@
-// plugins/network-inspector.js
 (function () {
     const DevTools = window.BjornDevTools;
-    if (!DevTools || !DevTools.definePlugin) return;
+    if (!DevTools) return;
+    
+    // Determine the target window for hooking
     const targetWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
 
-    DevTools.definePlugin("networkInspector", {
-        tab: "NETWORK",
+    DevTools.registerPlugin("networkInspector", {
+        tab: "networkInspector",
         _entries: [],
-        _maxEntries: 100,
+        _maxEntries: 50,
         _isCapturing: false, 
-
-        onLoad(api) {
-            // PATCH: Create Tab
-            api.ui.addTab("NETWORK", "Network");
-
-            const self = this;
-            this._renderList = (container) => {
-                if (!container) return;
-                container.innerHTML = "";
-                if (api.state.safeMode()) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#666;">🔒 Safe Mode is ON.<br>Network monitoring is disabled.</div>`; return; }
-                if (!this._isCapturing && this._entries.length === 0) { container.innerHTML = `<div style="padding:20px; text-align:center; color:#666;">Paused.<br>Press ⏺ to start capturing.</div>`; return; }
-
-                this._entries.slice().reverse().forEach(e => {
-                    let mColor = "#888";
-                    if(e.method==="GET") mColor="#4facfe";
-                    if(e.method==="POST") mColor="#43e97b";
-                    if(e.method==="DELETE"||e.status>=400) mColor="#ff5555";
-                    const row = api.dom.createRow([
-                        { text: e.method, width: '45px', color: mColor },
-                        { text: e.status, width: '35px', color: e.status >= 400 ? '#ff5555' : '#aaa' },
-                        { text: e.name, width: 'auto' },
-                        { text: Math.round(e.duration) + 'ms', width: '50px', color: '#666' }
-                    ]);
-                    row.style.cursor = "pointer";
-                    row.onclick = () => self._renderDetail(e);
-                    container.appendChild(row);
-                });
-            };
-
-            this._renderDetail = (e) => {
-                const view = api.ui.getView("NETWORK");
-                const det = view.querySelector(".bdt-net-detail");
-                if(!det) return;
-                det.innerHTML = `
-                    <div style="padding:10px; border-bottom:1px solid var(--bdt-border);">
-                        <div style="color:var(--bdt-accent); font-weight:bold;">${e.method} ${e.status}</div>
-                        <div style="font-size:10px; color:var(--bdt-text-dim); word-break:break-all; margin-top:4px;">${e.url}</div>
-                    </div>
-                    <div style="padding:10px; overflow:auto; flex:1;">
-                        <pre style="font-size:10px; margin:0; white-space:pre-wrap; color:var(--bdt-text);">${e.body || "No body captured."}</pre>
-                    </div>
-                `;
-            };
-
-            function capture(type, method, url, status, duration, body) {
-                if (api.state.safeMode() || !self._isCapturing) return;
-                let name = url.split('?')[0].split('/').pop(); if (!name) name = url;
-                self._entries.push({ type, method, url, name, status, duration, body, time: Date.now() });
-                if (self._entries.length > self._maxEntries) self._entries.shift();
-                if (api.state.currentTab() === "NETWORK") {
-                    const view = api.ui.getView("NETWORK");
-                    if(view) self._renderList(view.querySelector(".bdt-net-list"));
-                }
-            }
-
-            if (!targetWindow.__bdtNetHook) {
-                targetWindow.__bdtNetHook = true;
-                const origFetch = targetWindow.fetch;
-                targetWindow.fetch = async function (...args) {
-                    const start = performance.now();
-                    let method = "GET";
-                    let url = args[0];
-                    if (typeof url === 'object' && url.url) { url = url.url; method = url.method; }
-                    if (args[1] && args[1].method) method = args[1].method;
-                    let res; try { res = await origFetch.apply(this, args); } catch(e) { throw e; }
-                    const clone = res.clone();
-                    let body = ""; try { const txt = await clone.text(); body = txt.length > 1000 ? txt.slice(0,1000)+"..." : txt; } catch(e){}
-                    capture("fetch", method, String(url), res.status, performance.now()-start, body);
-                    return res;
-                };
-                const origOpen = targetWindow.XMLHttpRequest.prototype.open;
-                const origSend = targetWindow.XMLHttpRequest.prototype.send;
-                targetWindow.XMLHttpRequest.prototype.open = function(m, u) { this._bdtInfo = { m, u }; return origOpen.apply(this, arguments); };
-                targetWindow.XMLHttpRequest.prototype.send = function(body) {
-                    const start = performance.now();
-                    this.addEventListener("loadend", () => {
-                        let respBody = ""; try { if(this.responseType === '' || this.responseType === 'text') respBody = this.responseText.slice(0, 1000); } catch(e){}
-                        capture("xhr", this._bdtInfo.m, this._bdtInfo.u, this.status, performance.now()-start, respBody);
-                    });
-                    return origSend.apply(this, arguments);
-                };
-            }
-        },
 
         onMount(view, api) {
             const self = this;
-            const style = document.createElement('style');
-            style.textContent = `
-                .bdt-net-layout { display: flex; height: 100%; flex-direction: column; }
-                .bdt-net-toolbar { display: flex; justify-content: space-between; padding: 0 0 8px 0; border-bottom: 1px solid var(--bdt-border); }
-                .bdt-net-split { display: flex; flex: 1; overflow: hidden; }
-                .bdt-net-list { flex: 1; border-right: 1px solid var(--bdt-border); overflow-y: auto; }
-                .bdt-net-detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: rgba(0,0,0,0.2); }
-                .bdt-btn { background: transparent; border: 1px solid var(--bdt-border); color: var(--bdt-text); padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; }
-                .bdt-btn.active { background: var(--bdt-accent); color: #000; border-color: var(--bdt-accent); }
-            `;
-            view.appendChild(style);
-
+            
+            // Layout
             view.innerHTML = `
-                <div class="bdt-net-layout">
-                    <div class="bdt-net-toolbar">
-                        <div style="font-size:11px; font-weight:bold; color:var(--bdt-text-dim); padding-top:4px;">NETWORK TRAFFIC</div>
-                        <div style="display:flex; gap:5px;">
-                            <button id="bdt-net-toggle" class="bdt-btn">⏺ Record</button>
-                            <button id="bdt-net-clear" class="bdt-btn">🚫 Clear</button>
-                        </div>
+                <div style="display:flex; flex-direction:column; height:100%;">
+                    <div style="display:flex; justify-content:space-between; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.1);">
+                        <button id="bdt-net-toggle" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px;">⏺ Record</button>
+                        <button id="bdt-net-clear" style="background:transparent; border:1px solid #555; color:#ccc; padding:4px 8px; border-radius:4px;">🚫 Clear</button>
                     </div>
-                    <div class="bdt-net-split">
-                        <div class="bdt-net-list"></div>
-                        <div class="bdt-net-detail">
-                            <div style="padding:20px; color:#555; text-align:center;">Select a request</div>
-                        </div>
-                    </div>
+                    <div class="bdt-net-list" style="flex:1; overflow-y:auto;"></div>
                 </div>
             `;
-            view.appendChild(style);
 
             const btnToggle = view.querySelector("#bdt-net-toggle");
             const btnClear = view.querySelector("#bdt-net-clear");
             const listCont = view.querySelector(".bdt-net-list");
 
-            const updateBtn = () => {
-                if (self._isCapturing) { btnToggle.textContent = "⏹ Stop"; btnToggle.classList.add("active"); } 
-                else { btnToggle.textContent = "⏺ Record"; btnToggle.classList.remove("active"); }
+            this._render = () => {
+                listCont.innerHTML = "";
+                if (!this._isCapturing && this._entries.length === 0) {
+                    listCont.innerHTML = `<div style="padding:20px; text-align:center; color:#666;">Paused</div>`;
+                    return;
+                }
+                this._entries.slice().reverse().forEach(e => {
+                    let c = "#888";
+                    if(e.method === "GET") c = "#4facfe";
+                    if(e.method === "POST") c = "#43e97b";
+                    if(e.status >= 400) c = "#ff5555";
+                    
+                    const row = document.createElement("div");
+                    row.style.cssText = "display:flex; padding:6px; border-bottom:1px solid rgba(255,255,255,0.05); font-size:10px; cursor:pointer;";
+                    row.innerHTML = `
+                        <div style="width:40px; color:${c}; font-weight:bold;">${e.method}</div>
+                        <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0 5px;">${e.name}</div>
+                        <div style="width:30px; text-align:right; color:${e.status>=400?'#f55':'#aaa'}">${e.status}</div>
+                    `;
+                    row.onclick = () => { api.ui.switchTab("CONSOLE"); api.log(`[NET] ${e.method} ${e.url}\nStatus: ${e.status}\nBody: ${e.body}`); };
+                    listCont.appendChild(row);
+                });
             };
-            updateBtn();
 
             btnToggle.onclick = () => {
-                if (api.state.safeMode()) return api.log("Cannot enable Network Inspector in Safe Mode.");
-                self._isCapturing = !self._isCapturing;
-                updateBtn();
-                self._renderList(listCont);
+                this._isCapturing = !this._isCapturing;
+                btnToggle.textContent = this._isCapturing ? "⏹ Stop" : "⏺ Record";
+                btnToggle.style.color = this._isCapturing ? "#f55" : "#ccc";
+                this._render();
             };
+            
+            btnClear.onclick = () => { this._entries = []; this._render(); };
 
-            btnClear.onclick = () => {
-                self._entries = [];
-                self._renderList(listCont);
-                view.querySelector(".bdt-net-detail").innerHTML = '<div style="padding:20px; color:#555; text-align:center;">Select a request</div>';
-            };
-            self._renderList(listCont);
+            // Hooking Logic (Safe)
+            if (!targetWindow.__bdtNetHook) {
+                targetWindow.__bdtNetHook = true;
+                const origFetch = targetWindow.fetch;
+                targetWindow.fetch = async function (...args) {
+                    if(!self._isCapturing) return origFetch.apply(this, args);
+                    
+                    const start = performance.now();
+                    let url = (typeof args[0] === 'object') ? args[0].url : args[0];
+                    let method = (args[1] && args[1].method) ? args[1].method : "GET";
+                    
+                    try { 
+                        const res = await origFetch.apply(this, args); 
+                        const clone = res.clone();
+                        clone.text().then(txt => {
+                            let name = url.includes("?") ? url.split("?")[0] : url;
+                            name = name.split("/").pop() || name;
+                            self._entries.push({ method, url, name, status: res.status, body: txt.substring(0,200) });
+                            if(api.state.currentTab() === "networkInspector") self._render();
+                        });
+                        return res;
+                    } catch(e) { throw e; }
+                };
+            }
         }
     });
 })();
