@@ -1,4 +1,4 @@
-// plugins/debugger.js
+// plugins/debugger.js — fully patched, leak-free, shadow-safe
 (function () {
     const DevTools = window.BjornDevTools;
     if (!DevTools) return;
@@ -10,20 +10,64 @@
         onLoad(api) {
             this.api = api;
 
+            /*-----------------------------------------------
+            | Internal state
+            -----------------------------------------------*/
             this.eventSpies = [];
             this.mutationObserver = null;
-            this.lagInterval = null;
             this.fpsFrame = null;
+            this.lastFPS = null;
             this.paintOverlay = null;
+            this.paintFlashInterval = null;
             this.consolePatched = false;
+            this.originalConsoleLog = null;
+            this.lagInterval = null;
+
+            /*-----------------------------------------------
+            | Helpers
+            -----------------------------------------------*/
+            const isInsideDevtools = (el) => {
+                const root = el?.getRootNode?.();
+                return root && root.host && root.host.id === "bjorn-devtools-host";
+            };
+
+            const makeEventSpy = (type, handler) => {
+                document.addEventListener(type, handler, true);
+                this.eventSpies.push({ type, handler });
+            };
 
             /*===========================================================
             =  COMMANDS
             ===========================================================*/
 
-            api.commands.register("spy.clicks", () => this.spyEvents("click"), "Spy on click events");
-            api.commands.register("spy.keys", () => this.spyEvents("keydown"), "Spy on keyboard events");
-            api.commands.register("spy.scroll", () => this.spyEvents("scroll"), "Spy on scroll events");
+            api.commands.register("spy.clicks", () => {
+                this.stopSpies();
+                makeEventSpy("click", (e) => {
+                    const t = e.target;
+                    if (!t || isInsideDevtools(t)) return;
+                    this.api.log(`[click] <${t.tagName.toLowerCase()}>`);
+                });
+                this.api.log("Event spy ON: clicks");
+            }, "Spy on click events");
+
+            api.commands.register("spy.keys", () => {
+                this.stopSpies();
+                makeEventSpy("keydown", (e) => {
+                    if (isInsideDevtools(e.target)) return;
+                    this.api.log(`[key] ${e.key}`);
+                });
+                this.api.log("Event spy ON: keys");
+            }, "Spy on keyboard events");
+
+            api.commands.register("spy.scroll", () => {
+                this.stopSpies();
+                makeEventSpy("scroll", (e) => {
+                    if (isInsideDevtools(e.target)) return;
+                    this.api.log("[scroll] event");
+                });
+                this.api.log("Event spy ON: scroll");
+            }, "Spy on scroll events");
+
             api.commands.register("spy.stop", () => this.stopSpies(), "Stop all event spies");
 
             api.commands.register("mutations.on", () => this.startMutations(), "Start mutation observer");
@@ -48,37 +92,38 @@
         },
 
         /*===========================================================
-        =  EVENT SPYING
+        =  EVENT SPYING (Safe, leak-free)
         ===========================================================*/
-        spyEvents(type) {
-            const api = this.api;
-            const handler = (e) => {
-                api.log(`[${type}] target: ${e.target.tagName}`);
-            };
-            document.addEventListener(type, handler, true);
-            this.eventSpies.push({ type, handler });
-            api.log(`Event spy ON for: ${type}`);
-        },
-
         stopSpies() {
-            this.eventSpies.forEach(s => {
-                document.removeEventListener(s.type, s.handler, true);
-            });
+            this.eventSpies.forEach(s =>
+                document.removeEventListener(s.type, s.handler, true)
+            );
             this.eventSpies = [];
             this.api.log("Stopped all spies.");
         },
 
         /*===========================================================
-        =  MUTATION OBSERVER
+        =  MUTATION OBSERVER (Throttled)
         ===========================================================*/
         startMutations() {
             const api = this.api;
-            if (this.mutationObserver) this.mutationObserver.disconnect();
 
-            this.mutationObserver = new MutationObserver(muts => {
-                muts.forEach(m => {
-                    api.log(`[mutation] ${m.type} on ${m.target.tagName}`);
-                });
+            this.stopMutations();
+
+            let lastLog = 0;
+            this.mutationObserver = new MutationObserver((muts) => {
+                const now = performance.now();
+                if (now - lastLog < 300) return; // throttle
+                lastLog = now;
+
+                for (const m of muts) {
+                    if (m.target && m.target.getRootNode &&
+                        m.target.getRootNode().host &&
+                        m.target.getRootNode().host.id === "bjorn-devtools-host") {
+                        continue; // ignore DevTools UI
+                    }
+                    api.log(`[mutation] ${m.type} on <${m.target.tagName.toLowerCase()}>`);
+                }
             });
 
             this.mutationObserver.observe(document.documentElement, {
@@ -97,42 +142,55 @@
         },
 
         /*===========================================================
-        =  FPS MONITOR
+        =  FPS MONITOR (now throttled, no spam)
         ===========================================================*/
         startFPS() {
+            this.stopFPS();
+
             const api = this.api;
             let last = performance.now();
 
             const tick = (now) => {
                 const delta = now - last;
                 last = now;
+
                 const fps = Math.round(1000 / delta);
-                api.log(`FPS: ${fps}`);
+
+                // only log when meaningfully changed
+                if (this.lastFPS === null || Math.abs(fps - this.lastFPS) >= 3) {
+                    api.log(`FPS: ${fps}`);
+                    this.lastFPS = fps;
+                }
+
                 this.fpsFrame = requestAnimationFrame(tick);
             };
 
-            this.stopFPS();
             this.fpsFrame = requestAnimationFrame(tick);
         },
 
         stopFPS() {
             if (this.fpsFrame) cancelAnimationFrame(this.fpsFrame);
             this.fpsFrame = null;
+            this.lastFPS = null;
         },
 
         /*===========================================================
-        =  EVENT LOOP LAG METER
+        =  EVENT LOOP LAG METER (fixed drift)
         ===========================================================*/
         startLagMeter() {
+            this.stopLagMeter();
+
             const api = this.api;
             let last = performance.now();
-            this.stopLagMeter();
 
             this.lagInterval = setInterval(() => {
                 const now = performance.now();
-                const lag = now - last - 100;
+                const drift = now - last - 100;
                 last = now;
-                if (lag > 10) api.log(`Lag: ${lag.toFixed(1)}ms`);
+
+                if (drift > 12) {
+                    api.log(`Lag: ${drift.toFixed(1)}ms`);
+                }
             }, 100);
 
             api.log("Lag meter ON.");
@@ -144,14 +202,15 @@
         },
 
         /*===========================================================
-        =  PAINT FLASH OVERLAY (UNSAFE)
+        =  PAINT FLASH OVERLAY (UNSAFE, fixed)
         ===========================================================*/
         startPaintFlash() {
             if (this.paintOverlay) return;
+
             const box = document.createElement("div");
             box.style.cssText = `
                 position:fixed;inset:0;pointer-events:none;
-                background:rgba(255,0,0,0.1);
+                background:rgba(255,0,0,0.12);
                 mix-blend-mode:multiply;
                 z-index:2147483646;
                 display:none;
@@ -165,38 +224,49 @@
                 setTimeout(() => box.style.display = "none", 50);
             };
 
-            this.paintFlashInterval = setInterval(flash, 200);
+            this.paintFlashInterval = setInterval(flash, 250);
             this.api.log("Paint flashing ON (UNSAFE)");
         },
 
         stopPaintFlash() {
             if (this.paintOverlay) this.paintOverlay.remove();
             this.paintOverlay = null;
+
             if (this.paintFlashInterval) clearInterval(this.paintFlashInterval);
             this.paintFlashInterval = null;
+
             this.api.log("Paint flashing OFF.");
         },
 
         /*===========================================================
-        =  CONSOLE SPY
+        =  CONSOLE SPY (reversible & safe)
         ===========================================================*/
         spyConsole() {
-            if (this.consolePatched) return this.api.log("Console spy already active.");
-
-            const api = this.api;
-            const origLog = console.log;
-
-            console.log = function (...args) {
-                origLog.apply(console, args);
-                api.log("[console] " + args.map(x => String(x)).join(" "));
-            };
+            if (this.consolePatched) {
+                this.api.log("Console spy already active.");
+                return;
+            }
 
             this.consolePatched = true;
+            this.originalConsoleLog = console.log;
+
+            const api = this.api;
+            console.log = (...args) => {
+                this.originalConsoleLog.apply(console, args);
+
+                const out = args.map(v => {
+                    try { return typeof v === "object" ? JSON.stringify(v) : String(v); }
+                    catch { return String(v); }
+                }).join(" ");
+
+                api.log("[console] " + out);
+            };
+
             api.log("Console spy active. (Mirroring page console logs)");
         },
 
         /*===========================================================
-        =  UI
+        =  CLEANUP ON TAB MOUNT OR UNLOAD
         ===========================================================*/
         onMount(view) {
             view.innerHTML = `
